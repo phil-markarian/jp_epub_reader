@@ -5,6 +5,7 @@ Cargo.lock.bak
 
 # Tauri / Leptos build artifacts
 /dist
+/frontend/dist
 /src-tauri/target
 /src-tauri/gen
 .trunk
