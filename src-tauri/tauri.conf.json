@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "dev.philm.jp_epub_reader",
   "build": {
-    "beforeDevCommand": "cd ../frontend && trunk serve",
+    "beforeDevCommand": "cd frontend && trunk serve",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "cd ../frontend && trunk build",
+    "beforeBuildCommand": "cd frontend && trunk build",
     "frontendDist": "../frontend/dist"
   },
   "app": {
