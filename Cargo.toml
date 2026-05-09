@@ -1,7 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    # "src-tauri", # added once Tauri shell is scaffolded
+    "frontend",
+    "src-tauri",
     "crates/jp-core",
     "crates/jp-tokenizer",
     "crates/jp-dict",
@@ -19,6 +20,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Phil M."]
 license = "GPL-3.0-or-later"
+publish = false
 
 [workspace.dependencies]
 anyhow = "1"

@@ -5,6 +5,10 @@ all-features = false
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
+# Only flag unmaintained advisories on first-party workspace crates;
+# Tauri pulls in GTK3 + a handful of other unmaintained transitives that we
+# can't fix and don't ship on macOS anyway.
+unmaintained = "workspace"
 
 [licenses]
 allow = [
@@ -13,12 +17,14 @@ allow = [
     "Unicode-DFS-2016", "Unicode-3.0",
     "Zlib", "MPL-2.0", "CC0-1.0",
     "GPL-3.0", "GPL-3.0-or-later",
+    "BSL-1.0", "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
