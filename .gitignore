@@ -19,3 +19,7 @@ Cargo.lock.bak
 # Local env
 .env
 .env.local
+
+# Claude Code internal state
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
