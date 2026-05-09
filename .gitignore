@@ -1,0 +1,21 @@
+# Rust
+/target
+**/target
+Cargo.lock.bak
+
+# Tauri / Leptos build artifacts
+/dist
+/src-tauri/target
+/src-tauri/gen
+.trunk
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local env
+.env
+.env.local

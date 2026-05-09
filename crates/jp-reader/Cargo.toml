@@ -1,0 +1,13 @@
+[package]
+name = "jp-reader"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+jp-core = { path = "../jp-core" }
+jp-vocab = { path = "../jp-vocab" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+zip = { workspace = true }

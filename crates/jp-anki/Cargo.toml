@@ -1,0 +1,14 @@
+[package]
+name = "jp-anki"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+jp-core = { path = "../jp-core" }
+jp-vocab = { path = "../jp-vocab" }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

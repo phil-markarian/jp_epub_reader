@@ -1,0 +1,13 @@
+[package]
+name = "jp-vocab"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+jp-core = { path = "../jp-core" }
+jp-dict = { path = "../jp-dict" }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
