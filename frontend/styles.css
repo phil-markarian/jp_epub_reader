@@ -55,6 +55,14 @@ details[open] > summary::before { transform: rotate(90deg); }
 
 .summary-count { font-size: 0.8em; }
 
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  justify-content: center;
+}
+
 .banner {
   margin: 12px 0;
   padding: 10px 12px;

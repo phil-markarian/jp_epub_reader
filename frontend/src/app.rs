@@ -50,9 +50,16 @@ struct AozoraSourceStatus {
 #[derive(Serialize)]
 struct SearchArgs<'a> {
     query: &'a str,
+    offset: usize,
     limit: usize,
     #[serde(rename = "onlyPublicDomain")]
     only_public_domain: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SearchPage {
+    rows: Vec<AozoraWork>,
+    total: usize,
 }
 
 #[derive(Serialize)]
@@ -115,11 +122,15 @@ pub fn App() -> impl IntoView {
     let (status, set_status) = signal::<Option<AozoraSourceStatus>>(None);
     let (importer, set_importer) = signal::<Option<ImporterStatus>>(None);
     let (results, set_results) = signal::<Vec<AozoraWork>>(Vec::new());
+    let (total, set_total) = signal::<usize>(0);
+    let (page, set_page) = signal::<usize>(0);
     let (library, set_library) = signal::<Vec<LibraryEntry>>(Vec::new());
     let (query, set_query) = signal(String::new());
     let (only_public, set_only_public) = signal(true);
     let (busy, set_busy) = signal(false);
     let (banner, set_banner) = signal::<Option<String>>(None);
+
+    const PAGE_SIZE: usize = 50;
 
     let refresh_library = move || {
         spawn_local(async move {
@@ -158,7 +169,7 @@ pub fn App() -> impl IntoView {
 
     refresh_status();
 
-    let do_search = move || {
+    let fetch_page = move |p: usize| {
         let q = query.get_untracked();
         let only = only_public.get_untracked();
         spawn_local(async move {
@@ -166,20 +177,28 @@ pub fn App() -> impl IntoView {
                 "search_works",
                 &SearchArgs {
                     query: &q,
-                    limit: 100,
+                    offset: p * PAGE_SIZE,
+                    limit: PAGE_SIZE,
                     only_public_domain: only,
                 },
             )
             .await
             {
                 Ok(v) => {
-                    if let Ok(rows) = serde_wasm_bindgen::from_value::<Vec<AozoraWork>>(v) {
-                        set_results.set(rows);
+                    if let Ok(page) = serde_wasm_bindgen::from_value::<SearchPage>(v) {
+                        set_results.set(page.rows);
+                        set_total.set(page.total);
                     }
                 }
                 Err(e) => set_banner.set(Some(format!("search: {e}"))),
             }
         });
+    };
+
+    // Re-search with page reset (used when query / filter changes).
+    let do_search = move || {
+        set_page.set(0);
+        fetch_page(0);
     };
 
     let on_refresh_index = move |_| {
@@ -252,7 +271,16 @@ pub fn App() -> impl IntoView {
             </section>
 
             <LibraryPanel library=library refresh_library=refresh_library />
-            <ResultsList results=results refresh_library=refresh_library library=library />
+            <ResultsList
+                results=results
+                refresh_library=refresh_library
+                library=library
+                total=total
+                page=page
+                set_page=set_page
+                fetch_page=fetch_page
+                page_size=PAGE_SIZE
+            />
         </main>
     }
 }
@@ -362,10 +390,42 @@ fn ResultsList(
     results: ReadSignal<Vec<AozoraWork>>,
     refresh_library: impl Fn() + Copy + 'static + Send + Sync,
     library: ReadSignal<Vec<LibraryEntry>>,
+    total: ReadSignal<usize>,
+    page: ReadSignal<usize>,
+    set_page: WriteSignal<usize>,
+    fetch_page: impl Fn(usize) + Copy + 'static + Send + Sync,
+    page_size: usize,
 ) -> impl IntoView {
+    let last_page = move || {
+        let t = total.get();
+        if t == 0 { 0 } else { (t - 1) / page_size }
+    };
+    let on_prev = move |_| {
+        let p = page.get_untracked();
+        if p > 0 {
+            set_page.set(p - 1);
+            fetch_page(p - 1);
+        }
+    };
+    let on_next = move |_| {
+        let p = page.get_untracked();
+        if p < last_page() {
+            set_page.set(p + 1);
+            fetch_page(p + 1);
+        }
+    };
+
     view! {
         <details class="results" open=true>
-            <summary><h2>"Results"</h2></summary>
+            <summary>
+                <h2>"Results"</h2>
+                <span class="muted summary-count">
+                    {move || {
+                        let t = total.get();
+                        if t == 0 { String::new() } else { format!("({t})") }
+                    }}
+                </span>
+            </summary>
             {move || {
                 let rows = results.get();
                 if rows.is_empty() {
@@ -385,6 +445,29 @@ fn ResultsList(
                         </ul>
                     }.into_any()
                 }
+            }}
+            {move || {
+                let t = total.get();
+                if t == 0 {
+                    return view! { <span></span> }.into_any();
+                }
+                let p = page.get();
+                let lp = last_page();
+                let from = p * page_size + 1;
+                let to = ((p + 1) * page_size).min(t);
+                view! {
+                    <div class="pagination">
+                        <button type="button" on:click=on_prev prop:disabled=move || page.get() == 0>"‹ Prev"</button>
+                        <span class="muted">
+                            {format!("{from}-{to} of {t}")}
+                            " · page "
+                            {p + 1}
+                            " / "
+                            {lp + 1}
+                        </span>
+                        <button type="button" on:click=on_next prop:disabled=move || page.get() >= last_page()>"Next ›"</button>
+                    </div>
+                }.into_any()
             }}
         </details>
     }

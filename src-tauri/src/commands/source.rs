@@ -24,24 +24,33 @@ pub async fn refresh_index(state: State<'_, AppState>) -> Result<usize, String> 
 }
 
 /// Case-insensitive substring search across title/yomi/author/yomi/romaji,
-/// scored so exact-title hits surface first.
+/// scored so exact-title hits surface first. Returns a page of `limit`
+/// rows starting at `offset`, plus the total match count.
 #[tauri::command]
 pub fn search_works(
     query: String,
+    offset: usize,
     limit: usize,
     only_public_domain: bool,
     state: State<'_, AppState>,
-) -> Vec<AozoraWork> {
+) -> SearchPage {
     let needle = query.trim().to_lowercase();
     let works = state.works.lock().unwrap();
 
     if needle.is_empty() {
-        return works
+        let mut filtered: Vec<&AozoraWork> = works
             .iter()
             .filter(|w| !only_public_domain || !w.copyright_active)
+            .collect();
+        filtered.sort_by_key(|w| w.work_id);
+        let total = filtered.len();
+        let rows: Vec<AozoraWork> = filtered
+            .into_iter()
+            .skip(offset)
             .take(limit)
             .cloned()
             .collect();
+        return SearchPage { rows, total };
     }
 
     let mut scored: Vec<(u32, &AozoraWork)> = works
@@ -55,9 +64,21 @@ pub fn search_works(
         })
         .collect();
 
-    // Lower score = better match. Ties broken by work_id ascending.
     scored.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.work_id.cmp(&b.1.work_id)));
-    scored.into_iter().take(limit).map(|(_, w)| w.clone()).collect()
+    let total = scored.len();
+    let rows: Vec<AozoraWork> = scored
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .map(|(_, w)| w.clone())
+        .collect();
+    SearchPage { rows, total }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchPage {
+    pub rows: Vec<AozoraWork>,
+    pub total: usize,
 }
 
 /// Returns Some(score) if any field matches the needle. Lower is better.
