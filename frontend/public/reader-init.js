@@ -31,6 +31,23 @@ const themeCSS = (theme) => {
     `;
 };
 
+const buildCSS = (theme, fontScale, lineHeight) => {
+    return themeCSS(theme) + `
+        html { font-size: ${(fontScale * 100).toFixed(0)}% !important; }
+        p, li, blockquote, dd, div { line-height: ${lineHeight} !important; }
+    `;
+};
+
+const reapplyStyles = () => {
+    const view = window.__JP_READER._lastView;
+    const renderer = view?.renderer;
+    if (!renderer) return;
+    const theme = window.__JP_READER._theme || "light";
+    const scale = window.__JP_READER._fontScale ?? 1.0;
+    const lh = window.__JP_READER._lineHeight ?? 1.7;
+    renderer.setStyles?.(buildCSS(theme, scale, lh));
+};
+
 /** Background colors used for the chrome around the rendered page. */
 const themeBg = (theme) => {
     if (theme === "dark") return "#1a1a1a";
@@ -115,8 +132,9 @@ window.__JP_READER = {
                 // black-on-white which becomes invisible against a dark
                 // app chrome.
                 const initialTheme = window.__JP_READER._theme || "light";
-                renderer.setStyles?.(themeCSS(initialTheme));
                 applyChromeColors(initialTheme);
+                window.__JP_READER._lastView = view;
+                reapplyStyles();
                 // view.open() registers the book but doesn't paint
                 // anything; renderer.next() navigates to the first
                 // section.
@@ -144,17 +162,38 @@ window.__JP_READER = {
         const cur = window.__JP_READER._theme || "light";
         const next = order[(order.indexOf(cur) + 1) % order.length];
         window.__JP_READER._theme = next;
-        const view = window.__JP_READER._lastView;
-        view?.renderer?.setStyles?.(themeCSS(next));
         applyChromeColors(next);
+        reapplyStyles();
         return next;
     },
 
     setTheme(theme) {
         window.__JP_READER._theme = theme;
-        const view = window.__JP_READER._lastView;
-        view?.renderer?.setStyles?.(themeCSS(theme));
         applyChromeColors(theme);
+        reapplyStyles();
+    },
+
+    setFontScale(scale) {
+        window.__JP_READER._fontScale = scale;
+        reapplyStyles();
+    },
+
+    setLineHeight(lh) {
+        window.__JP_READER._lineHeight = lh;
+        reapplyStyles();
+    },
+
+    /**
+     * In scrolled mode for vertical-writing books, the document scrolls
+     * horizontally. Translate vertical wheel deltas onto the renderer's
+     * inner scroll container so a normal mouse-wheel still advances the
+     * reading position.
+     */
+    wheelScroll(deltaX, deltaY) {
+        const renderer = window.__JP_READER._lastView?.renderer;
+        const container = renderer?.shadowRoot?.getElementById("container");
+        if (!container) return;
+        container.scrollBy({ left: deltaX + deltaY, top: 0, behavior: "auto" });
     },
 
     /** Toggle paginated / scrolled flow. Returns the new flow. */

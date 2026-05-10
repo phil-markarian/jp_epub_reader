@@ -354,6 +354,33 @@ html, body { height: 100%; }
 .edge-next:hover {
   background: linear-gradient(to left, rgba(127, 127, 127, 0.18), transparent);
 }
+
+.reader-settings {
+  position: absolute;
+  top: 56px;
+  right: 12px;
+  z-index: 10;
+  background: var(--reader-bg);
+  color: var(--reader-fg);
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  border-radius: 8px;
+  padding: 12px 14px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 240px;
+}
+.reader-settings label {
+  display: grid;
+  grid-template-columns: 90px 1fr 48px;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.9em;
+}
+.reader-settings input[type="range"] {
+  width: 100%;
+}
 foliate-view {
   display: block;
   position: absolute;
