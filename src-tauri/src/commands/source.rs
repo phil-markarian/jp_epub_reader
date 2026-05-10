@@ -62,25 +62,29 @@ pub fn search_works(
 
 /// Returns Some(score) if any field matches the needle. Lower is better.
 fn relevance_score(w: &AozoraWork, needle: &str) -> Option<u32> {
-    let title_lc = w.title.to_lowercase();
-    if title_lc == needle {
+    // Exact work_id match wins outright (lets users paste 773 → kokoro).
+    if w.work_id.to_string() == needle {
         return Some(0);
     }
-    if title_lc.starts_with(needle) {
+    let title_lc = w.title.to_lowercase();
+    if title_lc == needle {
         return Some(1);
+    }
+    if title_lc.starts_with(needle) {
+        return Some(2);
     }
     let title_yomi_lc = w.title_yomi.to_lowercase();
     if title_yomi_lc == needle {
-        return Some(2);
-    }
-    if title_yomi_lc.starts_with(needle) {
         return Some(3);
     }
-    if title_lc.contains(needle) {
+    if title_yomi_lc.starts_with(needle) {
         return Some(4);
     }
-    if title_yomi_lc.contains(needle) {
+    if title_lc.contains(needle) {
         return Some(5);
+    }
+    if title_yomi_lc.contains(needle) {
+        return Some(6);
     }
     let author_lc = w.author.to_lowercase();
     let author_yomi_lc = w.author_yomi.to_lowercase();
@@ -89,7 +93,7 @@ fn relevance_score(w: &AozoraWork, needle: &str) -> Option<u32> {
         || author_yomi_lc.contains(needle)
         || romaji_lc.contains(needle)
     {
-        return Some(6);
+        return Some(7);
     }
     None
 }
