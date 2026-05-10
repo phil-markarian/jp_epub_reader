@@ -31,7 +31,7 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "stream", "gzip", "hickory-dns"] }
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "json", "stream", "gzip"] }
 encoding_rs = "0.8"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 csv = "1.3"

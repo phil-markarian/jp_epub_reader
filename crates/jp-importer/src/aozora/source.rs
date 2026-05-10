@@ -54,7 +54,9 @@ async fn resolve_remote(cache_dir: &Path, author_id: u32, stem: &str) -> Result<
     );
     tracing::info!(%url, "fetching aozora work file");
 
-    let bytes = reqwest::get(&url)
+    let bytes = super::aozora_http_client()?
+        .get(&url)
+        .send()
         .await
         .map_err(|e| Error::Other(format!("fetch {url}: {e}")))?
         .error_for_status()
