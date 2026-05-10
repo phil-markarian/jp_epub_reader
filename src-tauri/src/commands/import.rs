@@ -220,6 +220,24 @@ pub fn get_library_entry(
         .ok_or_else(|| "work not in library".into())
 }
 
+/// Returns the raw bytes of the EPUB file. Sent through Tauri's
+/// `Response::new` raw-bytes channel so the IPC payload skips JSON
+/// encoding and lands as an ArrayBuffer in the webview.
+#[tauri::command]
+pub fn read_epub_bytes(
+    work_id: u32,
+    state: State<'_, AppState>,
+) -> Result<tauri::ipc::Response, String> {
+    let entry = state
+        .db
+        .get_library(work_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("work not in library")?;
+    let bytes = std::fs::read(&entry.epub_path)
+        .map_err(|e| format!("read {}: {e}", entry.epub_path))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 /// Hand a file path off to the OS default application. macOS uses
 /// `open`; we'll add Linux/Windows variants once those targets matter.
 #[tauri::command]

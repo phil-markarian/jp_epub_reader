@@ -2,10 +2,13 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Tauri + Leptos App</title>
+    <title>JP EPUB Reader</title>
     <link data-trunk rel="css" href="styles.css" />
     <link data-trunk rel="copy-dir" href="public" />
     <link data-trunk rel="rust" data-wasm-opt="z" />
+    <!-- foliate-js bridge for the reader window. Side-effect import in
+         reader-init.js registers the <foliate-view> custom element. -->
+    <script type="module" src="/public/reader-init.js"></script>
   </head>
   <body></body>
 </html>
