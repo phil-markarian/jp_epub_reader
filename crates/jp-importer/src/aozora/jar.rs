@@ -47,7 +47,10 @@ pub fn run(
 ) -> Result<PathBuf> {
     std::fs::create_dir_all(out_dir)?;
 
-    let snapshot = list_epubs(out_dir);
+    // Use mtime instead of a before/after diff: re-imports overwrite
+    // an existing .epub at the same path, so the listing wouldn't
+    // change but the bytes would.
+    let run_start = std::time::SystemTime::now();
 
     let txt_abs = txt_path
         .canonicalize()
@@ -80,8 +83,7 @@ pub fn run(
         )));
     }
 
-    let after = list_epubs(out_dir);
-    let new_epub = after.into_iter().find(|p| !snapshot.contains(p)).ok_or_else(|| {
+    let new_epub = newest_epub_since(out_dir, run_start).ok_or_else(|| {
         let stdout = String::from_utf8_lossy(&output.stdout);
         Error::Other(format!(
             "AozoraEpub3 produced no .epub. stdout: {}",
@@ -92,18 +94,28 @@ pub fn run(
     Ok(new_epub)
 }
 
-fn list_epubs(dir: &Path) -> std::collections::BTreeSet<PathBuf> {
-    let mut s = std::collections::BTreeSet::new();
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return s;
-    };
-    for entry in rd.flatten() {
+fn newest_epub_since(dir: &Path, since: std::time::SystemTime) -> Option<PathBuf> {
+    // Allow a small clock skew between us and the OS metadata timestamp.
+    let cutoff = since
+        .checked_sub(std::time::Duration::from_secs(2))
+        .unwrap_or(since);
+    let mut best: Option<(PathBuf, std::time::SystemTime)> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let p = entry.path();
-        if p.extension().and_then(|e| e.to_str()) == Some("epub") {
-            s.insert(p);
+        if p.extension().and_then(|e| e.to_str()) != Some("epub") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(mtime) = meta.modified() else { continue };
+        if mtime < cutoff {
+            continue;
+        }
+        match &best {
+            Some((_, t)) if *t >= mtime => {}
+            _ => best = Some((p, mtime)),
         }
     }
-    s
+    best.map(|(p, _)| p)
 }
 
 /// Cheap sanity check that an EPUB file looks plausibly real.
