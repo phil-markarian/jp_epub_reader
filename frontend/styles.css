@@ -112,7 +112,8 @@ button:hover    { border-color: #74a3ff; }
 button:active   { background: #eef3ff; }
 button:disabled { color: #999; cursor: default; }
 
-.results ul {
+.results ul,
+.library ul {
   list-style: none;
   padding: 0;
   margin: 0;

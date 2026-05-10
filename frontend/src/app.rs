@@ -493,24 +493,22 @@ fn ResultRow(
     };
 
     let stem_present = stem.is_some();
+
+    // Reactive: is this work already in the library?
+    let in_library = move || library.get().iter().any(|e| e.work_id == work_id);
+
+    // Reactive: epub_path of the library entry, if any. Lets us show
+    // Open without waiting for a fresh import in this session.
+    let library_epub = move || {
+        library
+            .get()
+            .iter()
+            .find(|e| e.work_id == work_id)
+            .map(|e| e.epub_path.clone())
+    };
+
     let on_import = move |_| {
         if !stem_present { return }
-        // If this work is already in the library, ask before re-importing.
-        let already_imported = library
-            .get_untracked()
-            .iter()
-            .any(|e| e.work_id == work_id);
-        if already_imported {
-            let msg = format!(
-                "Work {work_id} is already in your library. Re-import and overwrite the existing EPUB?"
-            );
-            let confirmed = web_sys::window()
-                .and_then(|w| w.confirm_with_message(&msg).ok())
-                .unwrap_or(false);
-            if !confirmed {
-                return;
-            }
-        }
         set_importing.set(true);
         set_row_error.set(None);
         spawn_local(async move {
@@ -529,7 +527,8 @@ fn ResultRow(
     };
 
     let on_open = move |_| {
-        let Some(p) = epub_path.get_untracked() else { return };
+        let p = epub_path.get_untracked().or_else(library_epub);
+        let Some(p) = p else { return };
         spawn_local(async move {
             if let Err(e) = invoke_with("open_path", &OpenArgs { path: &p }).await {
                 set_row_error.set(Some(format!("open: {e}")));
@@ -555,21 +554,33 @@ fn ResultRow(
             </div>
             <div class="actions">
                 <button type="button" on:click=on_resolve>"Resolve"</button>
-                {move || if epub_path.get().is_some() {
-                    view! {
-                        <span class="imported-flash">"✓ EPUB"</span>
-                        <button type="button" on:click=on_open>"Open"</button>
-                    }.into_any()
-                } else {
-                    view! {
-                        <button
-                            type="button"
-                            on:click=on_import
-                            prop:disabled=move || importing.get()
-                        >
-                            {move || if importing.get() { "Importing…" } else { "Import" }}
-                        </button>
-                    }.into_any()
+                {move || {
+                    let just_imported = epub_path.get().is_some();
+                    let stored = in_library();
+                    let busy = importing.get();
+                    if just_imported || stored {
+                        let label = if busy { "Re-importing…" } else { "Re-import" };
+                        view! {
+                            <span class="imported-flash">"✓ EPUB"</span>
+                            <button type="button" on:click=on_open>"Open"</button>
+                            <button
+                                type="button"
+                                on:click=on_import
+                                prop:disabled=move || importing.get()
+                                title="Overwrite the existing EPUB"
+                            >{label}</button>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <button
+                                type="button"
+                                on:click=on_import
+                                prop:disabled=move || importing.get()
+                            >
+                                {move || if importing.get() { "Importing…" } else { "Import" }}
+                            </button>
+                        }.into_any()
+                    }
                 }}
             </div>
         </div>
