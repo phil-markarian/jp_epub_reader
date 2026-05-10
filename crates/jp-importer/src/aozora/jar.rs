@@ -114,10 +114,16 @@ pub fn epub_looks_valid(epub_path: &Path) -> bool {
     let Ok(mut zip) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) else {
         return false;
     };
+    // Different EPUB toolchains stage payload under different roots:
+    // AozoraEpub3 uses OPS/, modern epubcheck output uses EPUB/, older
+    // tooling uses OEBPS/, some hand-rolled tools use item/. Accept any.
     for i in 0..zip.len() {
         if let Ok(f) = zip.by_index(i) {
             let n = f.name();
-            let in_payload = n.starts_with("EPUB/") || n.starts_with("OEBPS/") || n.starts_with("item/");
+            let in_payload = n.starts_with("OPS/")
+                || n.starts_with("EPUB/")
+                || n.starts_with("OEBPS/")
+                || n.starts_with("item/");
             if in_payload && n.ends_with(".xhtml") && f.size() > 200 {
                 return true;
             }

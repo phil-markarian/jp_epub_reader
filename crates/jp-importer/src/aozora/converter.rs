@@ -57,13 +57,22 @@ fn run_jar_auto(
     ];
 
     let mut last_err: Option<String> = None;
+    let mut suspicious: Option<PathBuf> = None;
+
     for (label, dir) in preferences {
         let Some(dir) = dir else { continue };
         match jar::run(java, dir, txt_path, out_dir) {
-            Ok(p) if jar::epub_looks_valid(&p) => return Ok(p),
+            Ok(p) if jar::epub_looks_valid(&p) => {
+                if let Some(s) = suspicious.take() {
+                    if s != p {
+                        let _ = std::fs::remove_file(&s);
+                    }
+                }
+                return Ok(p);
+            }
             Ok(p) => {
-                tracing::warn!(label, ?p, "jar produced suspicious output, trying next");
-                let _ = std::fs::remove_file(&p);
+                tracing::warn!(label, ?p, "jar produced suspicious output, holding as fallback");
+                suspicious = Some(p);
                 last_err = Some(format!("{label}: output failed sanity check"));
             }
             Err(e) => {
@@ -71,6 +80,13 @@ fn run_jar_auto(
                 last_err = Some(format!("{label}: {e}"));
             }
         }
+    }
+
+    if let Some(p) = suspicious {
+        // No strategy produced a clean win; keep the most-recent
+        // suspicious-but-extant EPUB rather than failing outright.
+        tracing::warn!(?p, "no strategy passed sanity check; returning best-effort output");
+        return Ok(p);
     }
 
     Err(Error::Other(format!(
