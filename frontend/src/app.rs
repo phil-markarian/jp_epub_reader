@@ -791,18 +791,28 @@ fn LibraryRow(
         });
     };
 
+    // Two-click delete: first click arms; second click within ~3s
+    // performs the deletion. Avoids window.confirm (blocked in
+    // WKWebView) while still being explicit.
+    let (armed, set_armed) = signal::<bool>(false);
+
     let on_remove = move |_| {
-        let confirmed = web_sys::window()
-            .and_then(|w| {
-                w.confirm_with_message(
-                    "Remove this work from your library? This deletes the EPUB and source files on disk.",
-                )
-                .ok()
-            })
-            .unwrap_or(false);
-        if !confirmed {
+        if !armed.get_untracked() {
+            set_armed.set(true);
+            // Auto-disarm after 3s.
+            spawn_local(async move {
+                let win = web_sys::window().unwrap();
+                let promise = js_sys::Promise::new(&mut |resolve, _| {
+                    let _ = win.set_timeout_with_callback_and_timeout_and_arguments_0(
+                        &resolve, 3000,
+                    );
+                });
+                let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+                set_armed.set(false);
+            });
             return;
         }
+        set_armed.set(false);
         spawn_local(async move {
             if let Err(e) = invoke_with(
                 "delete_library_entry",
@@ -811,6 +821,7 @@ fn LibraryRow(
             .await
             {
                 web_sys::console::error_1(&format!("remove: {e}").into());
+                return;
             }
             refresh_library();
         });
@@ -825,7 +836,14 @@ fn LibraryRow(
             </div>
             <div class="actions">
                 <button type="button" on:click=on_open>"Open"</button>
-                <button type="button" class="danger" on:click=on_remove title="Remove from library">"✕"</button>
+                <button
+                    type="button"
+                    class="danger"
+                    on:click=on_remove
+                    title=move || if armed.get() { "Click again to confirm" } else { "Remove from library" }.to_string()
+                >
+                    {move || if armed.get() { "Confirm?" } else { "✕" }}
+                </button>
             </div>
         </div>
     }

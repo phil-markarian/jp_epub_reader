@@ -38,6 +38,8 @@ pub fn run() {
             commands::import::open_path,
             commands::import::list_library,
             commands::import::delete_library_entry,
+            commands::import::open_reader_window,
+            commands::import::get_library_entry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

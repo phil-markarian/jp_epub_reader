@@ -156,6 +156,70 @@ pub fn delete_library_entry(
         .map_err(|e| e.to_string())
 }
 
+/// Open the in-app reader window for a library entry. Reuses the
+/// existing window if one with the same label is already open.
+#[tauri::command]
+pub async fn open_reader_window(
+    work_id: u32,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    use tauri::Manager;
+
+    let entry = state
+        .db
+        .get_library(work_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("work not in library")?;
+
+    let label = format!("reader-{work_id}");
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.set_focus();
+        let _ = window.unminimize();
+        return Ok(());
+    }
+
+    let title = format!(
+        "{}{}",
+        entry.title,
+        entry
+            .author
+            .as_ref()
+            .map(|a| format!(" — {a}"))
+            .unwrap_or_default()
+    );
+
+    let url = tauri::WebviewUrl::App(format!("index.html?reader={work_id}").into());
+    tauri::WebviewWindowBuilder::new(&app, &label, url)
+        .title(title)
+        .inner_size(900.0, 1100.0)
+        .min_inner_size(480.0, 600.0)
+        .build()
+        .map_err(|e| format!("open reader window: {e}"))?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let _ = state.db.touch_library(work_id, now);
+
+    Ok(())
+}
+
+/// Returns the LibraryEntry for `work_id`. Reader windows call this on
+/// boot to know what to render.
+#[tauri::command]
+pub fn get_library_entry(
+    work_id: u32,
+    state: State<'_, AppState>,
+) -> Result<LibraryEntry, String> {
+    state
+        .db
+        .get_library(work_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "work not in library".into())
+}
+
 /// Hand a file path off to the OS default application. macOS uses
 /// `open`; we'll add Linux/Windows variants once those targets matter.
 #[tauri::command]

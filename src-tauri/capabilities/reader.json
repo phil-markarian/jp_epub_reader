@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "reader",
+  "description": "Reader windows — narrow scope: render an EPUB, look up words. No download, no settings, no library mutation.",
+  "windows": ["reader-*"],
+  "permissions": [
+    "core:default"
+  ]
+}
