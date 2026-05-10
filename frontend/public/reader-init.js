@@ -46,6 +46,11 @@ window.__JP_READER = {
                 renderer.setAttribute("max-inline-size", "720");
                 renderer.setAttribute("max-block-size", "1100");
                 renderer.setAttribute("gap", "5%");
+                // view.open() registers the book but doesn't paint anything;
+                // either init() or a manual next() actually navigates to
+                // the first section. Use renderer.next() to skip cover
+                // logic (Aozora EPUBs don't carry one most of the time).
+                renderer.next?.();
             } else {
                 console.warn("[reader-init] view.renderer not set after open");
             }
