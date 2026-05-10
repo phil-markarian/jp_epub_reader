@@ -24,6 +24,8 @@ web-sys = { version = "0.3", features = [
     "Blob",
     "BlobPropertyBag",
     "WheelEvent",
+    "KeyboardEvent",
+    "EventTarget",
 ] }
 serde = { workspace = true }
 serde-wasm-bindgen = "0.6"

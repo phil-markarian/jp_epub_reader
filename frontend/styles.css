@@ -381,6 +381,37 @@ html, body { height: 100%; }
 .reader-settings input[type="range"] {
   width: 100%;
 }
+.reader-settings-divider {
+  border: none;
+  border-top: 1px solid rgba(127, 127, 127, 0.3);
+  margin: 4px 0;
+  width: 100%;
+}
+.reader-keybinds h3 {
+  margin: 0 0 6px;
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--reader-fg);
+  opacity: 0.7;
+}
+.reader-keybinds dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  font-size: 0.85em;
+}
+.reader-keybinds dt { font-weight: 500; }
+.reader-keybinds dd { margin: 0; display: flex; gap: 4px; flex-wrap: wrap; }
+.reader-keybinds kbd {
+  padding: 1px 5px;
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 0.9em;
+  background: rgba(127, 127, 127, 0.08);
+}
 foliate-view {
   display: block;
   position: absolute;

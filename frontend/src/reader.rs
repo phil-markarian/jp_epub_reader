@@ -161,6 +161,73 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
     let (line_height, set_line_height) = signal::<f64>(1.7);
 
     let on_toggle_settings = move |_| set_settings_open.update(|v| *v = !*v);
+
+    // Keyboard shortcuts. Attached once via Effect.
+    let last_key_ms = StoredValue::new(0.0_f64);
+    Effect::new(move |_| {
+        let Some(window) = web_sys::window() else { return };
+        let cb = Closure::wrap(Box::new(move |ev: web_sys::KeyboardEvent| {
+            if ev.meta_key() || ev.ctrl_key() || ev.alt_key() {
+                return;
+            }
+            // Swallow auto-repeat bursts.
+            let now = js_sys::Date::now();
+            if ev.repeat() && now - last_key_ms.get_value() < 80.0 {
+                return;
+            }
+            last_key_ms.set_value(now);
+
+            let key = ev.key();
+            match key.as_str() {
+                "ArrowRight" | "ArrowDown" | "j" | "J" | "l" | "L" | " " => {
+                    ev.prevent_default();
+                    jp_next();
+                }
+                "ArrowLeft" | "ArrowUp" | "k" | "K" | "h" | "H" => {
+                    ev.prevent_default();
+                    jp_prev();
+                }
+                "t" | "T" => {
+                    ev.prevent_default();
+                    let v = jp_toggle_flow();
+                    let next = v.as_string().unwrap_or_else(|| "paginated".into());
+                    let next: &'static str = if next == "scrolled" { "scrolled" } else { "paginated" };
+                    set_flow.set(next);
+                }
+                "d" | "D" => {
+                    ev.prevent_default();
+                    let v = jp_cycle_theme();
+                    let next = v.as_string().unwrap_or_else(|| "light".into());
+                    let next: &'static str = match next.as_str() {
+                        "dark" => "dark",
+                        "sepia" => "sepia",
+                        _ => "light",
+                    };
+                    set_theme.set(next);
+                }
+                "," | "?" => {
+                    ev.prevent_default();
+                    set_settings_open.update(|v| *v = !*v);
+                }
+                "+" | "=" => {
+                    ev.prevent_default();
+                    let v = (font_scale.get_untracked() + 0.05).min(2.0);
+                    set_font_scale.set(v);
+                    jp_set_font_scale(v);
+                }
+                "-" | "_" => {
+                    ev.prevent_default();
+                    let v = (font_scale.get_untracked() - 0.05).max(0.6);
+                    set_font_scale.set(v);
+                    jp_set_font_scale(v);
+                }
+                _ => {}
+            }
+        }) as Box<dyn FnMut(web_sys::KeyboardEvent)>);
+        let _ = window
+            .add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
+        cb.forget();
+    });
     let on_font_input = move |ev: leptos::ev::Event| {
         let v: f64 = event_target_value(&ev).parse().unwrap_or(1.0);
         set_font_scale.set(v);
@@ -232,6 +299,19 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                         />
                         <span class="muted">{move || format!("{:.2}", line_height.get())}</span>
                     </label>
+
+                    <hr class="reader-settings-divider" />
+                    <div class="reader-keybinds">
+                        <h3>"Keyboard shortcuts"</h3>
+                        <dl>
+                            <dt>"Next page"</dt>      <dd><kbd>"→"</kbd>" "<kbd>"↓"</kbd>" "<kbd>"J"</kbd>" "<kbd>"L"</kbd>" "<kbd>"Space"</kbd></dd>
+                            <dt>"Previous page"</dt>  <dd><kbd>"←"</kbd>" "<kbd>"↑"</kbd>" "<kbd>"K"</kbd>" "<kbd>"H"</kbd></dd>
+                            <dt>"Toggle flow"</dt>    <dd><kbd>"T"</kbd></dd>
+                            <dt>"Cycle theme"</dt>    <dd><kbd>"D"</kbd></dd>
+                            <dt>"Bigger / smaller"</dt><dd><kbd>"+"</kbd>" / "<kbd>"-"</kbd></dd>
+                            <dt>"Settings"</dt>       <dd><kbd>","</kbd></dd>
+                        </dl>
+                    </div>
                 </div>
             })}
 
