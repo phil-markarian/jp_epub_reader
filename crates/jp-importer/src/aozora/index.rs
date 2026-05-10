@@ -109,7 +109,6 @@ pub fn parse_index(csv_path: &Path) -> Result<Vec<AozoraWork>> {
         .from_path(csv_path)
         .map_err(|e| Error::Other(format!("open csv {csv_path:?}: {e}")))?;
 
-    let mut works = Vec::with_capacity(20_000);
     let mut saw_kokoro = false;
 
     // Real CSV layout (verified against the live Aozora extended CSV;
@@ -124,7 +123,16 @@ pub fn parse_index(csv_path: &Path) -> Result<Vec<AozoraWork>> {
     //   16  名                      given
     //   17  姓読み                  surname_yomi
     //   18  名読み                  given_yomi
+    //   23  役割フラグ              role flag ("著者" / "翻訳者" / etc.)
     //   45  テキストファイルURL      text URL (zip)
+    //
+    // The CSV has one row per (work, contributor), so a work with both
+    // an original author and a translator appears twice. We dedupe by
+    // work_id, preferring the row marked "著者" so the search doesn't
+    // show two near-identical entries.
+    let mut by_work: std::collections::BTreeMap<u32, (AozoraWork, bool)> =
+        std::collections::BTreeMap::new();
+
     for record in rdr.records() {
         let r = record.map_err(|e| Error::Other(format!("csv row: {e}")))?;
 
@@ -137,15 +145,17 @@ pub fn parse_index(csv_path: &Path) -> Result<Vec<AozoraWork>> {
         let given = field(&r, 16);
         let surname_yomi = field(&r, 17);
         let given_yomi = field(&r, 18);
+        let role = field(&r, 23);
         let text_url = Some(field(&r, 45)).filter(|s| !s.is_empty());
 
         let stem = text_url.and_then(extract_stem);
+        let is_author = role == "著者";
 
         if work_id == 773 && title.contains("こころ") {
             saw_kokoro = true;
         }
 
-        works.push(AozoraWork {
+        let entry = AozoraWork {
             work_id,
             author_id,
             title,
@@ -154,8 +164,27 @@ pub fn parse_index(csv_path: &Path) -> Result<Vec<AozoraWork>> {
             author_yomi: format!("{surname_yomi}{given_yomi}"),
             copyright_active,
             stem,
-        });
+        };
+
+        match by_work.get(&work_id) {
+            // Already have this work, and the existing pick is the
+            // canonical author — keep it.
+            Some((_, true)) => {}
+            // We have something but it isn't the author row; replace
+            // if the new row IS the author.
+            Some((_, false)) if is_author => {
+                by_work.insert(work_id, (entry, true));
+            }
+            // Otherwise (no entry yet, or both are non-author rows)
+            // insert/keep the most recent.
+            _ => {
+                by_work.insert(work_id, (entry, is_author));
+            }
+        }
     }
+
+    let mut works: Vec<AozoraWork> = by_work.into_values().map(|(w, _)| w).collect();
+    works.sort_by_key(|w| w.work_id);
 
     if !saw_kokoro {
         return Err(Error::Invalid(
