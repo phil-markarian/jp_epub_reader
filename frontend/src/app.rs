@@ -5,17 +5,25 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "core"])]
-    async fn invoke(cmd: &str, args: JsValue) -> JsValue;
+    #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "core"], catch)]
+    async fn invoke(cmd: &str, args: JsValue) -> Result<JsValue, JsValue>;
 }
 
-async fn invoke_no_args(cmd: &str) -> JsValue {
-    invoke(cmd, js_sys::Object::new().into()).await
+async fn invoke_no_args(cmd: &str) -> Result<JsValue, String> {
+    invoke(cmd, js_sys::Object::new().into())
+        .await
+        .map_err(stringify_err)
 }
 
-async fn invoke_with<T: Serialize>(cmd: &str, args: &T) -> JsValue {
+async fn invoke_with<T: Serialize>(cmd: &str, args: &T) -> Result<JsValue, String> {
     let v = serde_wasm_bindgen::to_value(args).unwrap();
-    invoke(cmd, v).await
+    invoke(cmd, v).await.map_err(stringify_err)
+}
+
+fn stringify_err(v: JsValue) -> String {
+    v.as_string()
+        .or_else(|| js_sys::JSON::stringify(&v).ok().map(|s| s.into()))
+        .unwrap_or_else(|| "unknown error".into())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -68,9 +76,15 @@ pub fn App() -> impl IntoView {
 
     let refresh_status = move || {
         spawn_local(async move {
-            let v = invoke_no_args("get_aozora_source_status").await;
-            if let Ok(s) = serde_wasm_bindgen::from_value::<AozoraSourceStatus>(v) {
-                set_status.set(Some(s));
+            match invoke_no_args("get_aozora_source_status").await {
+                Ok(v) => {
+                    if let Ok(s) = serde_wasm_bindgen::from_value::<AozoraSourceStatus>(v) {
+                        set_status.set(Some(s));
+                    } else {
+                        set_banner.set(Some("status: failed to decode response".into()));
+                    }
+                }
+                Err(e) => set_banner.set(Some(format!("status: {e}"))),
             }
         });
     };
@@ -81,7 +95,7 @@ pub fn App() -> impl IntoView {
         let q = query.get_untracked();
         let only = only_public.get_untracked();
         spawn_local(async move {
-            let v = invoke_with(
+            match invoke_with(
                 "search_works",
                 &SearchArgs {
                     query: &q,
@@ -89,9 +103,14 @@ pub fn App() -> impl IntoView {
                     only_public_domain: only,
                 },
             )
-            .await;
-            if let Ok(rows) = serde_wasm_bindgen::from_value::<Vec<AozoraWork>>(v) {
-                set_results.set(rows);
+            .await
+            {
+                Ok(v) => {
+                    if let Ok(rows) = serde_wasm_bindgen::from_value::<Vec<AozoraWork>>(v) {
+                        set_results.set(rows);
+                    }
+                }
+                Err(e) => set_banner.set(Some(format!("search: {e}"))),
             }
         });
     };
@@ -100,14 +119,16 @@ pub fn App() -> impl IntoView {
         set_busy.set(true);
         set_banner.set(Some("Refreshing index…".into()));
         spawn_local(async move {
-            let v = invoke_no_args("refresh_index").await;
-            match serde_wasm_bindgen::from_value::<usize>(v) {
-                Ok(n) => {
-                    set_banner.set(Some(format!("Loaded {n} works.")));
-                    refresh_status();
-                    do_search();
-                }
-                Err(e) => set_banner.set(Some(format!("Refresh failed: {e:?}"))),
+            match invoke_no_args("refresh_index").await {
+                Ok(v) => match serde_wasm_bindgen::from_value::<usize>(v) {
+                    Ok(n) => {
+                        set_banner.set(Some(format!("Loaded {n} works.")));
+                        refresh_status();
+                        do_search();
+                    }
+                    Err(e) => set_banner.set(Some(format!("refresh: bad payload: {e}"))),
+                },
+                Err(e) => set_banner.set(Some(format!("refresh: {e}"))),
             }
             set_busy.set(false);
         });
@@ -186,21 +207,25 @@ fn SourcesPanel(
     let on_set_path = move |_| {
         let p = path_input.get_untracked();
         spawn_local(async move {
-            let v = invoke_with("set_aozora_repo_path", &SetRepoArgs { path: &p }).await;
-            if v.is_null() {
-                set_banner.set(Some(format!("Local repo set: {p}")));
-                refresh_status();
-            } else if let Some(err) = v.as_string() {
-                set_banner.set(Some(format!("Failed: {err}")));
+            match invoke_with("set_aozora_repo_path", &SetRepoArgs { path: &p }).await {
+                Ok(_) => {
+                    set_banner.set(Some(format!("Local repo set: {p}")));
+                    refresh_status();
+                }
+                Err(e) => set_banner.set(Some(format!("Failed: {e}"))),
             }
         });
     };
 
     let on_clear = move |_| {
         spawn_local(async move {
-            let _ = invoke_no_args("clear_aozora_repo_path").await;
-            set_banner.set(Some("Local repo cleared; using remote.".into()));
-            refresh_status();
+            match invoke_no_args("clear_aozora_repo_path").await {
+                Ok(_) => {
+                    set_banner.set(Some("Local repo cleared; using remote.".into()));
+                    refresh_status();
+                }
+                Err(e) => set_banner.set(Some(format!("Clear failed: {e}"))),
+            }
         });
     };
 
@@ -278,7 +303,7 @@ fn ResultRow(work: AozoraWork) -> impl IntoView {
     let on_resolve = move |_| {
         let Some(stem) = stem.clone() else { return };
         spawn_local(async move {
-            let _v = invoke_with(
+            let res = invoke_with(
                 "resolve_work",
                 &ResolveArgs {
                     author_id,
@@ -286,8 +311,12 @@ fn ResultRow(work: AozoraWork) -> impl IntoView {
                 },
             )
             .await;
-            // Result handling will be expanded in Phase 2 when this kicks off
-            // an actual import. For now resolve just warms the on-disk cache.
+            // Phase 2 will trigger the actual import; for now log the
+            // outcome to the web console so errors aren't silent.
+            match res {
+                Ok(v) => web_sys::console::log_2(&"resolve_work ok:".into(), &v),
+                Err(e) => web_sys::console::error_1(&format!("resolve_work: {e}").into()),
+            }
         });
     };
 
