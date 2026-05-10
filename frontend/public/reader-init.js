@@ -50,6 +50,28 @@ const applyChromeColors = (theme) => {
     root.style.setProperty("--reader-fg", themeFg(theme));
 };
 
+/**
+ * Foliate's paginator caps each column with max-inline-size /
+ * max-block-size. For tategaki the inline axis is *vertical*, so
+ * max-inline-size controls column height. We size paginated columns
+ * to a comfortable height and width so the page actually fills the
+ * window, and drop the caps entirely in scrolled mode so the stream
+ * grows to fit.
+ */
+const applyFlowSizing = (renderer, flow) => {
+    if (flow === "scrolled") {
+        renderer.removeAttribute("max-inline-size");
+        renderer.removeAttribute("max-block-size");
+        renderer.removeAttribute("max-column-count");
+    } else {
+        // Tategaki vertical-rl: inline = vertical (column height),
+        // block = horizontal (column width).
+        renderer.setAttribute("max-inline-size", "900");
+        renderer.setAttribute("max-block-size", "1400");
+        renderer.setAttribute("max-column-count", "2");
+    }
+};
+
 window.__JP_READER = {
     /**
      * @param {HTMLElement} container - element to append the view into
@@ -87,9 +109,8 @@ window.__JP_READER = {
                 const initialFlow = window.__JP_READER._flow || "paginated";
                 renderer.setAttribute("flow", initialFlow);
                 renderer.setAttribute("animated", "");
-                renderer.setAttribute("max-inline-size", "720");
-                renderer.setAttribute("max-block-size", "1100");
                 renderer.setAttribute("gap", "5%");
+                applyFlowSizing(renderer, initialFlow);
                 // Force a readable theme; Aozora's EPUB CSS hard-codes
                 // black-on-white which becomes invisible against a dark
                 // app chrome.
@@ -142,7 +163,10 @@ window.__JP_READER = {
         const next = cur === "paginated" ? "scrolled" : "paginated";
         window.__JP_READER._flow = next;
         const renderer = window.__JP_READER._lastView?.renderer;
-        renderer?.setAttribute?.("flow", next);
+        if (renderer) {
+            renderer.setAttribute("flow", next);
+            applyFlowSizing(renderer, next);
+        }
         return next;
     },
 };
