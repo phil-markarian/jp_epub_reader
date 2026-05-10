@@ -53,7 +53,14 @@ async fn download_index(cache_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(cache_dir)?;
 
     tracing::info!(url = INDEX_URL, "fetching aozora index");
-    let bytes = reqwest::get(INDEX_URL)
+    let client = reqwest::Client::builder()
+        .hickory_dns(true)
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| Error::Other(format!("build http client: {}", source_chain(&e))))?;
+    let bytes = client
+        .get(INDEX_URL)
+        .send()
         .await
         .map_err(|e| Error::Other(format!("download index send: {}", source_chain(&e))))?
         .error_for_status()
