@@ -112,18 +112,31 @@ pub fn parse_index(csv_path: &Path) -> Result<Vec<AozoraWork>> {
     let mut works = Vec::with_capacity(20_000);
     let mut saw_kokoro = false;
 
+    // Real CSV layout (verified against the live Aozora extended CSV;
+    // the v1 docs had several columns off by one or two):
+    //
+    //   0   作品ID                  work_id
+    //   1   作品名                  title
+    //   2   作品名読み              title_yomi
+    //   10  作品著作権フラグ          copyright flag ("あり" = active)
+    //   14  人物ID                  author_id
+    //   15  姓                      surname
+    //   16  名                      given
+    //   17  姓読み                  surname_yomi
+    //   18  名読み                  given_yomi
+    //   45  テキストファイルURL      text URL (zip)
     for record in rdr.records() {
         let r = record.map_err(|e| Error::Other(format!("csv row: {e}")))?;
 
         let work_id: u32 = field(&r, 0).parse().unwrap_or(0);
         let title = field(&r, 1).to_string();
         let title_yomi = field(&r, 2).to_string();
-        let copyright_active = field(&r, 4) == "あり";
-        let author_id: u32 = field(&r, 15).parse().unwrap_or(0);
-        let surname = field(&r, 16);
-        let given = field(&r, 17);
-        let surname_yomi = field(&r, 18);
-        let given_yomi = field(&r, 19);
+        let copyright_active = field(&r, 10) == "あり";
+        let author_id: u32 = field(&r, 14).parse().unwrap_or(0);
+        let surname = field(&r, 15);
+        let given = field(&r, 16);
+        let surname_yomi = field(&r, 17);
+        let given_yomi = field(&r, 18);
         let text_url = Some(field(&r, 45)).filter(|s| !s.is_empty());
 
         let stem = text_url.and_then(extract_stem);
@@ -292,12 +305,12 @@ mod tests {
         cols[0] = work_id.to_string();
         cols[1] = title.into();
         cols[2] = title_yomi.into();
-        cols[4] = copyright.into();
-        cols[15] = author_id.to_string();
-        cols[16] = surname.into();
-        cols[17] = given.into();
-        cols[18] = surname_yomi.into();
-        cols[19] = given_yomi.into();
+        cols[10] = copyright.into();
+        cols[14] = author_id.to_string();
+        cols[15] = surname.into();
+        cols[16] = given.into();
+        cols[17] = surname_yomi.into();
+        cols[18] = given_yomi.into();
         cols[45] = text_url.into();
         cols.join(",")
     }
