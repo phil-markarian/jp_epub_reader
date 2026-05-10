@@ -286,14 +286,21 @@ button.primary:hover:not(:disabled) {
   font-size: 0.92em;
 }
 .reader-title { font-weight: 600; }
+html, body { height: 100%; }
+.reader-shell { height: 100vh; }
+
 .reader-stage {
   flex: 1 1 auto;
   padding: 0;
-  display: flex;
+  display: block;
+  position: relative;
+  overflow: hidden;
   min-height: 0;
 }
-.reader-stage > foliate-view {
-  flex: 1 1 auto;
+foliate-view {
+  display: block;
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
 }

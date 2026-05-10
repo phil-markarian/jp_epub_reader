@@ -16,35 +16,45 @@ window.__JP_READER = {
      * @returns {Promise<{ view: HTMLElement }>}
      */
     async mount(container, blob, onRelocate, onLoad) {
-        // Reset container so re-entries don't stack views.
-        container.replaceChildren();
+        try {
+            // Reset container so re-entries don't stack views.
+            container.replaceChildren();
 
-        const view = document.createElement("foliate-view");
-        container.append(view);
+            const view = document.createElement("foliate-view");
+            container.append(view);
 
-        if (typeof onRelocate === "function") {
-            view.addEventListener("relocate", (e) => onRelocate(e.detail));
+            if (typeof onRelocate === "function") {
+                view.addEventListener("relocate", (e) => onRelocate(e.detail));
+            }
+            if (typeof onLoad === "function") {
+                view.addEventListener("load", (e) => onLoad(e.detail));
+            }
+
+            const file = blob instanceof File
+                ? blob
+                : new File([blob], "book.epub", { type: "application/epub+zip" });
+
+            console.log("[reader-init] opening EPUB", file);
+            await view.open(file);
+            console.log("[reader-init] view.open resolved", view);
+
+            // Default to a comfortable column width for vertical Japanese reading.
+            const renderer = view.renderer;
+            if (renderer) {
+                renderer.setAttribute("flow", "paginated");
+                renderer.setAttribute("animated", "");
+                renderer.setAttribute("max-inline-size", "720");
+                renderer.setAttribute("max-block-size", "1100");
+                renderer.setAttribute("gap", "5%");
+            } else {
+                console.warn("[reader-init] view.renderer not set after open");
+            }
+
+            return { view };
+        } catch (err) {
+            console.error("[reader-init] mount failed", err);
+            throw err;
         }
-        if (typeof onLoad === "function") {
-            view.addEventListener("load", (e) => onLoad(e.detail));
-        }
-
-        const file = blob instanceof File
-            ? blob
-            : new File([blob], "book.epub", { type: "application/epub+zip" });
-        await view.open(file);
-
-        // Default to a comfortable column width for vertical Japanese reading.
-        const renderer = view.renderer;
-        if (renderer) {
-            renderer.setAttribute("flow", "paginated");
-            renderer.setAttribute("animated", "");
-            renderer.setAttribute("max-inline-size", "720");
-            renderer.setAttribute("max-block-size", "1100");
-            renderer.setAttribute("gap", "5%");
-        }
-
-        return { view };
     },
 
     /** Navigate the most recently-mounted view. */
