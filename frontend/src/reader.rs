@@ -25,6 +25,9 @@ extern "C" {
     #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "cycleTheme")]
     fn jp_cycle_theme() -> JsValue;
 
+    #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "toggleFlow")]
+    fn jp_toggle_flow() -> JsValue;
+
     #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "next")]
     fn jp_next();
 
@@ -104,6 +107,7 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
     });
 
     let (theme, set_theme) = signal::<&'static str>("light");
+    let (flow, set_flow) = signal::<&'static str>("paginated");
     let on_cycle_theme = move |_| {
         let v = jp_cycle_theme();
         let next = v.as_string().unwrap_or_else(|| "light".into());
@@ -113,6 +117,12 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
             _ => "light",
         };
         set_theme.set(next);
+    };
+    let on_toggle_flow = move |_| {
+        let v = jp_toggle_flow();
+        let next = v.as_string().unwrap_or_else(|| "paginated".into());
+        let next: &'static str = if next == "scrolled" { "scrolled" } else { "paginated" };
+        set_flow.set(next);
     };
     let on_prev = move |_| jp_prev();
     let on_next = move |_| jp_next();
@@ -136,6 +146,9 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                     }
                 }}
                 <div class="reader-spacer"></div>
+                <button type="button" class="reader-control" on:click=on_toggle_flow title="Toggle paginated / scrolled">
+                    {move || if flow.get() == "scrolled" { "⇅" } else { "⇆" }}
+                </button>
                 <button type="button" class="reader-control" on:click=on_prev title="Previous page (←)">"‹"</button>
                 <button type="button" class="reader-control" on:click=on_next title="Next page (→)">"›"</button>
                 <button type="button" class="reader-control" on:click=on_cycle_theme title="Cycle theme">

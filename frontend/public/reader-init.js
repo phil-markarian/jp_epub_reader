@@ -31,6 +31,25 @@ const themeCSS = (theme) => {
     `;
 };
 
+/** Background colors used for the chrome around the rendered page. */
+const themeBg = (theme) => {
+    if (theme === "dark") return "#1a1a1a";
+    if (theme === "sepia") return "#f4ecd8";
+    return "#ffffff";
+};
+
+const themeFg = (theme) => {
+    if (theme === "dark") return "#e8e8e8";
+    if (theme === "sepia") return "#3b2f1c";
+    return "#111111";
+};
+
+const applyChromeColors = (theme) => {
+    const root = document.documentElement;
+    root.style.setProperty("--reader-bg", themeBg(theme));
+    root.style.setProperty("--reader-fg", themeFg(theme));
+};
+
 window.__JP_READER = {
     /**
      * @param {HTMLElement} container - element to append the view into
@@ -65,7 +84,8 @@ window.__JP_READER = {
             // Default to a comfortable column width for vertical Japanese reading.
             const renderer = view.renderer;
             if (renderer) {
-                renderer.setAttribute("flow", "paginated");
+                const initialFlow = window.__JP_READER._flow || "paginated";
+                renderer.setAttribute("flow", initialFlow);
                 renderer.setAttribute("animated", "");
                 renderer.setAttribute("max-inline-size", "720");
                 renderer.setAttribute("max-block-size", "1100");
@@ -75,6 +95,7 @@ window.__JP_READER = {
                 // app chrome.
                 const initialTheme = window.__JP_READER._theme || "light";
                 renderer.setStyles?.(themeCSS(initialTheme));
+                applyChromeColors(initialTheme);
                 // view.open() registers the book but doesn't paint
                 // anything; renderer.next() navigates to the first
                 // section.
@@ -104,6 +125,7 @@ window.__JP_READER = {
         window.__JP_READER._theme = next;
         const view = window.__JP_READER._lastView;
         view?.renderer?.setStyles?.(themeCSS(next));
+        applyChromeColors(next);
         return next;
     },
 
@@ -111,6 +133,17 @@ window.__JP_READER = {
         window.__JP_READER._theme = theme;
         const view = window.__JP_READER._lastView;
         view?.renderer?.setStyles?.(themeCSS(theme));
+        applyChromeColors(theme);
+    },
+
+    /** Toggle paginated / scrolled flow. Returns the new flow. */
+    toggleFlow() {
+        const cur = window.__JP_READER._flow || "paginated";
+        const next = cur === "paginated" ? "scrolled" : "paginated";
+        window.__JP_READER._flow = next;
+        const renderer = window.__JP_READER._lastView?.renderer;
+        renderer?.setAttribute?.("flow", next);
+        return next;
     },
 };
 
