@@ -1,7 +1,9 @@
+use leptos::html;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::closure::Closure;
 
 #[wasm_bindgen]
 extern "C" {
@@ -133,6 +135,53 @@ pub fn App() -> impl IntoView {
 
     const PAGE_SIZE: usize = 50;
     const LIBRARY_PAGE_SIZE: usize = 25;
+
+    // Which section the floating pager should target. Updated on scroll.
+    let (active_section, set_active_section) = signal::<&'static str>("results");
+
+    let library_section: NodeRef<html::Details> = NodeRef::new();
+    let results_section: NodeRef<html::Details> = NodeRef::new();
+
+    Effect::new(move |_| {
+        // Wait until both sections have mounted.
+        let (Some(lib), Some(res)) = (library_section.get(), results_section.get()) else {
+            return;
+        };
+        let lib_el: web_sys::HtmlElement = (*lib).clone().into();
+        let res_el: web_sys::HtmlElement = (*res).clone().into();
+        let Some(window) = web_sys::window() else { return };
+
+        let recompute = move || {
+            let scroll_y = window.scroll_y().unwrap_or(0.0);
+            let viewport_h = window
+                .inner_height()
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            // Use viewport-center as the focus point.
+            let focus = scroll_y + viewport_h * 0.4;
+            let res_top = res_el.offset_top() as f64;
+            let lib_top = lib_el.offset_top() as f64;
+            let active = if focus >= res_top {
+                "results"
+            } else if focus >= lib_top {
+                "library"
+            } else {
+                "library"
+            };
+            set_active_section.set(active);
+        };
+        recompute();
+
+        let cb = Closure::wrap(Box::new(recompute) as Box<dyn FnMut()>);
+        let _ = web_sys::window()
+            .unwrap()
+            .add_event_listener_with_callback("scroll", cb.as_ref().unchecked_ref());
+        let _ = web_sys::window()
+            .unwrap()
+            .add_event_listener_with_callback("resize", cb.as_ref().unchecked_ref());
+        cb.forget();
+    });
 
     let refresh_library = move || {
         spawn_local(async move {
@@ -278,6 +327,7 @@ pub fn App() -> impl IntoView {
                 page=lib_page
                 set_page=set_lib_page
                 page_size=LIBRARY_PAGE_SIZE
+                node_ref=library_section
             />
             <ResultsList
                 results=results
@@ -288,13 +338,19 @@ pub fn App() -> impl IntoView {
                 set_page=set_page
                 fetch_page=fetch_page
                 page_size=PAGE_SIZE
+                node_ref=results_section
             />
-            <FloatingPager
-                total=total
-                page=page
-                set_page=set_page
-                fetch_page=fetch_page
-                page_size=PAGE_SIZE
+            <SmartFloatingPager
+                active_section=active_section
+                results_total=total
+                results_page=page
+                set_results_page=set_page
+                fetch_results_page=fetch_page
+                results_page_size=PAGE_SIZE
+                library=library
+                lib_page=lib_page
+                set_lib_page=set_lib_page
+                lib_page_size=LIBRARY_PAGE_SIZE
             />
         </main>
     }
@@ -410,9 +466,10 @@ fn ResultsList(
     set_page: WriteSignal<usize>,
     fetch_page: impl Fn(usize) + Copy + 'static + Send + Sync,
     page_size: usize,
+    node_ref: NodeRef<html::Details>,
 ) -> impl IntoView {
     view! {
-        <details class="results" open=true>
+        <details class="results" open=true node_ref=node_ref>
             <summary>
                 <h2>"Results"</h2>
                 <span class="muted summary-count">
@@ -505,49 +562,90 @@ fn PaginationBar(
 }
 
 #[component]
-fn FloatingPager(
-    total: ReadSignal<usize>,
-    page: ReadSignal<usize>,
-    set_page: WriteSignal<usize>,
-    fetch_page: impl Fn(usize) + Copy + 'static + Send + Sync,
-    page_size: usize,
+fn SmartFloatingPager(
+    active_section: ReadSignal<&'static str>,
+    // Results pager wiring
+    results_total: ReadSignal<usize>,
+    results_page: ReadSignal<usize>,
+    set_results_page: WriteSignal<usize>,
+    fetch_results_page: impl Fn(usize) + Copy + 'static + Send + Sync,
+    results_page_size: usize,
+    // Library pager wiring (client-side paginated)
+    library: ReadSignal<Vec<LibraryEntry>>,
+    lib_page: ReadSignal<usize>,
+    set_lib_page: WriteSignal<usize>,
+    lib_page_size: usize,
 ) -> impl IntoView {
-    let last_page = move || {
-        let t = total.get();
-        if t == 0 { 0 } else { (t - 1) / page_size }
+    let on_prev = move |_| match active_section.get() {
+        "library" => {
+            let p = lib_page.get_untracked();
+            if p > 0 { set_lib_page.set(p - 1); }
+        }
+        _ => {
+            let p = results_page.get_untracked();
+            if p > 0 {
+                set_results_page.set(p - 1);
+                fetch_results_page(p - 1);
+            }
+        }
     };
-    let on_prev = move |_| {
-        let p = page.get_untracked();
-        if p > 0 { set_page.set(p - 1); fetch_page(p - 1); }
-    };
-    let on_next = move |_| {
-        let p = page.get_untracked();
-        if p < last_page() { set_page.set(p + 1); fetch_page(p + 1); }
+    let on_next = move |_| match active_section.get() {
+        "library" => {
+            let total = library.get_untracked().len();
+            let last = if total == 0 { 0 } else { (total - 1) / lib_page_size };
+            let p = lib_page.get_untracked();
+            if p < last { set_lib_page.set(p + 1); }
+        }
+        _ => {
+            let total = results_total.get_untracked();
+            let last = if total == 0 { 0 } else { (total - 1) / results_page_size };
+            let p = results_page.get_untracked();
+            if p < last {
+                set_results_page.set(p + 1);
+                fetch_results_page(p + 1);
+            }
+        }
     };
 
     view! {
         {move || {
-            // Only show when there's actually more than one page.
-            if total.get() <= page_size {
+            let section = active_section.get();
+            let (page_now, last, total) = if section == "library" {
+                let t = library.get().len();
+                let last = if t == 0 { 0 } else { (t - 1) / lib_page_size };
+                (lib_page.get(), last, t)
+            } else {
+                let t = results_total.get();
+                let last = if t == 0 { 0 } else { (t - 1) / results_page_size };
+                (results_page.get(), last, t)
+            };
+            // Hide if there's only one page in the active section.
+            let page_size = if section == "library" { lib_page_size } else { results_page_size };
+            if total <= page_size {
                 return view! { <div></div> }.into_any();
             }
+            let class = format!("floating-pager pager-{section}");
+            let label = if section == "library" { "Library" } else { "Results" };
+            let prev_disabled = page_now == 0;
+            let next_disabled = page_now >= last;
             view! {
-                <div class="floating-pager">
+                <div class=class>
                     <button
                         type="button"
                         class="float-prev"
                         on:click=on_prev
-                        prop:disabled=move || page.get() == 0
-                        title="Previous page"
-                        aria-label="Previous page"
+                        prop:disabled=prev_disabled
+                        title=format!("Previous page ({label})")
+                        aria-label=format!("Previous page in {label}")
                     >"‹"</button>
+                    <div class="float-section-label">{label}</div>
                     <button
                         type="button"
                         class="float-next"
                         on:click=on_next
-                        prop:disabled=move || (page.get() >= last_page())
-                        title="Next page"
-                        aria-label="Next page"
+                        prop:disabled=next_disabled
+                        title=format!("Next page ({label})")
+                        aria-label=format!("Next page in {label}")
                     >"›"</button>
                 </div>
             }.into_any()
@@ -562,6 +660,7 @@ fn LibraryPanel(
     page: ReadSignal<usize>,
     set_page: WriteSignal<usize>,
     page_size: usize,
+    node_ref: NodeRef<html::Details>,
 ) -> impl IntoView {
     let total = move || library.get().len();
     let last_page = move || {
@@ -596,7 +695,7 @@ fn LibraryPanel(
     };
 
     view! {
-        <details class="library" open=true>
+        <details class="library" open=true node_ref=node_ref>
             <summary>
                 <h2>"Library"</h2>
                 <span class="muted summary-count">
