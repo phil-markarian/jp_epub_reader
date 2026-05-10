@@ -25,3 +25,4 @@ tracing-subscriber = { workspace = true }
 
 jp-core = { path = "../crates/jp-core" }
 jp-importer = { path = "../crates/jp-importer" }
+jp-vocab = { path = "../crates/jp-vocab" }

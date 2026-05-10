@@ -2268,6 +2268,7 @@ version = "0.1.0"
 dependencies = [
  "jp-core",
  "jp-importer",
+ "jp-vocab",
  "serde",
  "serde_json",
  "tauri",
@@ -2359,6 +2360,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

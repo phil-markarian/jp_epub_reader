@@ -83,8 +83,17 @@ struct ImportArgs {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct OpenArgs<'a> {
     path: &'a str,
+    work_id: Option<u32>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteArgs {
+    work_id: u32,
+    delete_files: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -99,10 +108,16 @@ struct ImportResult {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct LibraryEntry {
     work_id: u32,
+    #[serde(default)]
+    source_id: String,
     title: String,
     author: Option<String>,
     epub_path: String,
-    imported_at: i64,
+    #[serde(default)]
+    raw_text_path: Option<String>,
+    added_at: i64,
+    #[serde(default)]
+    last_opened_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -287,7 +302,6 @@ pub fn App() -> impl IntoView {
         <main class="container">
             <header>
                 <h1>"JP EPUB Reader"</h1>
-                <p class="subtitle">"Phase 1 — Aozora source"</p>
             </header>
 
             <SourcesPanel status=status set_banner=set_banner refresh_status=refresh_status />
@@ -758,17 +772,47 @@ fn LibraryRow(
     entry: LibraryEntry,
     refresh_library: impl Fn() + Copy + 'static + Send + Sync,
 ) -> impl IntoView {
-    let _ = refresh_library;
     let title = entry.title.clone();
     let author = entry.author.clone().unwrap_or_default();
     let work_id = entry.work_id;
     let path_for_open = entry.epub_path.clone();
+
     let on_open = move |_| {
         let p = path_for_open.clone();
         spawn_local(async move {
-            if let Err(e) = invoke_with("open_path", &OpenArgs { path: &p }).await {
+            if let Err(e) = invoke_with(
+                "open_path",
+                &OpenArgs { path: &p, work_id: Some(work_id) },
+            )
+            .await
+            {
                 web_sys::console::error_1(&format!("open: {e}").into());
             }
+        });
+    };
+
+    let on_remove = move |_| {
+        let confirmed = web_sys::window()
+            .and_then(|w| {
+                w.confirm_with_message(
+                    "Remove this work from your library? This deletes the EPUB and source files on disk.",
+                )
+                .ok()
+            })
+            .unwrap_or(false);
+        if !confirmed {
+            return;
+        }
+        spawn_local(async move {
+            if let Err(e) = invoke_with(
+                "delete_library_entry",
+                &DeleteArgs { work_id, delete_files: true },
+            )
+            .await
+            {
+                web_sys::console::error_1(&format!("remove: {e}").into());
+            }
+            refresh_library();
         });
     };
 
@@ -781,6 +825,7 @@ fn LibraryRow(
             </div>
             <div class="actions">
                 <button type="button" on:click=on_open>"Open"</button>
+                <button type="button" class="danger" on:click=on_remove title="Remove from library">"✕"</button>
             </div>
         </div>
     }
@@ -862,7 +907,12 @@ fn ResultRow(
         let p = epub_path.get_untracked().or_else(library_epub);
         let Some(p) = p else { return };
         spawn_local(async move {
-            if let Err(e) = invoke_with("open_path", &OpenArgs { path: &p }).await {
+            if let Err(e) = invoke_with(
+                "open_path",
+                &OpenArgs { path: &p, work_id: Some(work_id) },
+            )
+            .await
+            {
                 set_row_error.set(Some(format!("open: {e}")));
             }
         });

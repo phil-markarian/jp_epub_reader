@@ -1,9 +1,11 @@
-//! Phase 2 — import a resolved Aozora work into an EPUB on disk.
+//! Phase 2/3 — import a resolved Aozora work into an EPUB on disk and
+//! register it in the library DB.
 
 use crate::state::AppState;
 use jp_importer::aozora::{AozoraImporter, AozoraInput, AozoraSource, AozoraStrategy};
 use jp_importer::{ImportResult, Importer};
-use serde::{Deserialize, Serialize};
+use jp_vocab::{LibraryEntry, NewLibraryEntry};
+use serde::Serialize;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
@@ -83,87 +85,27 @@ pub async fn import_aozora_work(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Persist a sidecar so the library panel can re-list this entry
-    // after restart without re-running the importer.
-    let now = SystemTime::now()
+    let added_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    let entry = LibraryEntry {
-        work_id,
-        title: result.title.clone(),
-        author: result.author.clone(),
-        epub_path: result.epub_path.to_string_lossy().into_owned(),
-        imported_at: now,
-    };
-    let meta_path = library.join(work_id.to_string()).join("meta.json");
-    if let Ok(bytes) = serde_json::to_vec_pretty(&entry) {
-        let _ = std::fs::write(meta_path, bytes);
-    }
+    state
+        .db
+        .upsert_library(&NewLibraryEntry {
+            work_id,
+            source_id: result.source_id.clone(),
+            title: result.title.clone(),
+            author: result.author.clone(),
+            epub_path: result.epub_path.to_string_lossy().into_owned(),
+            raw_text_path: result
+                .raw_text_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            added_at,
+        })
+        .map_err(|e| e.to_string())?;
 
     Ok(result)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LibraryEntry {
-    pub work_id: u32,
-    pub title: String,
-    pub author: Option<String>,
-    pub epub_path: String,
-    /// Unix seconds.
-    pub imported_at: i64,
-}
-
-#[tauri::command]
-pub fn list_library(state: State<'_, AppState>) -> Vec<LibraryEntry> {
-    let lib = state.app_data_dir.join("library");
-    let mut entries: Vec<LibraryEntry> = Vec::new();
-    let Ok(rd) = std::fs::read_dir(&lib) else {
-        return entries;
-    };
-    for e in rd.flatten() {
-        let dir = e.path();
-        let meta = dir.join("meta.json");
-        if let Ok(bytes) = std::fs::read(&meta) {
-            if let Ok(le) = serde_json::from_slice::<LibraryEntry>(&bytes) {
-                if std::path::Path::new(&le.epub_path).exists() {
-                    entries.push(le);
-                    continue;
-                }
-            }
-        }
-        // No meta — backfill from a stray .epub if one is present.
-        if let Some(le) = backfill_entry(&dir) {
-            entries.push(le);
-        }
-    }
-    entries.sort_by_key(|e| std::cmp::Reverse(e.imported_at));
-    entries
-}
-
-fn backfill_entry(dir: &std::path::Path) -> Option<LibraryEntry> {
-    let work_id: u32 = dir.file_name()?.to_string_lossy().parse().ok()?;
-    let epub = std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .find_map(|e| {
-            let p = e.path();
-            (p.extension().and_then(|s| s.to_str()) == Some("epub")).then_some(p)
-        })?;
-    let stem = epub.file_stem()?.to_string_lossy().into_owned();
-    let imported_at = std::fs::metadata(&epub)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    Some(LibraryEntry {
-        work_id,
-        title: stem,
-        author: None,
-        epub_path: epub.to_string_lossy().into_owned(),
-        imported_at,
-    })
 }
 
 #[tauri::command]
@@ -185,10 +127,43 @@ pub fn get_aozora_strategy(state: State<'_, AppState>) -> AozoraStrategy {
         .unwrap_or_default()
 }
 
+#[tauri::command]
+pub fn list_library(state: State<'_, AppState>) -> Result<Vec<LibraryEntry>, String> {
+    state.db.list_library().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_library_entry(
+    work_id: u32,
+    delete_files: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if let Some(entry) = state.db.get_library(work_id).map_err(|e| e.to_string())? {
+        if delete_files {
+            // Delete the per-work directory rather than just the EPUB so
+            // the source.txt + utf8 sidecar go too. Best-effort.
+            let dir = state.app_data_dir.join("library").join(work_id.to_string());
+            if dir.exists() {
+                let _ = std::fs::remove_dir_all(&dir);
+            } else if let Ok(p) = std::path::PathBuf::from(&entry.epub_path).canonicalize() {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+    }
+    state
+        .db
+        .delete_library(work_id)
+        .map_err(|e| e.to_string())
+}
+
 /// Hand a file path off to the OS default application. macOS uses
 /// `open`; we'll add Linux/Windows variants once those targets matter.
 #[tauri::command]
-pub fn open_path(path: String) -> Result<(), String> {
+pub fn open_path(
+    path: String,
+    work_id: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let p = std::path::PathBuf::from(&path);
     if !p.exists() {
         return Err(format!("path not found: {path}"));
@@ -213,6 +188,13 @@ pub fn open_path(path: String) -> Result<(), String> {
             .args(["/C", "start", "", &path])
             .spawn()
             .map_err(|e| format!("start: {e}"))?;
+    }
+    if let Some(id) = work_id {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let _ = state.db.touch_library(id, now);
     }
     Ok(())
 }

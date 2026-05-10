@@ -37,6 +37,7 @@ pub fn run() {
             commands::import::set_aozora_strategy,
             commands::import::open_path,
             commands::import::list_library,
+            commands::import::delete_library_entry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

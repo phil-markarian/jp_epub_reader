@@ -252,6 +252,15 @@ button:disabled { color: #999; cursor: default; }
   border-radius: 4px;
   font-size: 0.85em;
 }
+button.danger {
+  color: #b03030;
+  border-color: #f4c2c2;
+}
+button.danger:hover:not(:disabled) {
+  background: #fde7e7;
+  border-color: #e07474;
+}
+
 .row-error {
   margin: 4px 0 0;
   padding: 4px 8px;
