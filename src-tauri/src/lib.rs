@@ -35,6 +35,8 @@ pub fn run() {
             commands::import::import_aozora_work,
             commands::import::get_aozora_strategy,
             commands::import::set_aozora_strategy,
+            commands::import::open_path,
+            commands::import::list_library,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

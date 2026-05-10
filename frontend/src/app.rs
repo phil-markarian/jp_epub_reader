@@ -71,6 +71,11 @@ struct ImportArgs {
     work_id: u32,
 }
 
+#[derive(Serialize)]
+struct OpenArgs<'a> {
+    path: &'a str,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ImportResult {
     epub_path: String,
@@ -78,6 +83,15 @@ struct ImportResult {
     title: String,
     author: Option<String>,
     raw_text_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct LibraryEntry {
+    work_id: u32,
+    title: String,
+    author: Option<String>,
+    epub_path: String,
+    imported_at: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -99,10 +113,23 @@ pub fn App() -> impl IntoView {
     let (status, set_status) = signal::<Option<AozoraSourceStatus>>(None);
     let (importer, set_importer) = signal::<Option<ImporterStatus>>(None);
     let (results, set_results) = signal::<Vec<AozoraWork>>(Vec::new());
+    let (library, set_library) = signal::<Vec<LibraryEntry>>(Vec::new());
     let (query, set_query) = signal(String::new());
     let (only_public, set_only_public) = signal(true);
     let (busy, set_busy) = signal(false);
     let (banner, set_banner) = signal::<Option<String>>(None);
+
+    let refresh_library = move || {
+        spawn_local(async move {
+            if let Ok(v) = invoke_no_args("list_library").await {
+                if let Ok(rows) = serde_wasm_bindgen::from_value::<Vec<LibraryEntry>>(v) {
+                    set_library.set(rows);
+                }
+            }
+        });
+    };
+
+    refresh_library();
 
     spawn_local(async move {
         if let Ok(v) = invoke_no_args("get_importer_status").await {
@@ -222,7 +249,8 @@ pub fn App() -> impl IntoView {
                 </label>
             </section>
 
-            <ResultsList results=results />
+            <LibraryPanel library=library refresh_library=refresh_library />
+            <ResultsList results=results refresh_library=refresh_library />
         </main>
     }
 }
@@ -328,10 +356,13 @@ fn ImporterStatusLine(importer: ReadSignal<Option<ImporterStatus>>) -> impl Into
 }
 
 #[component]
-fn ResultsList(results: ReadSignal<Vec<AozoraWork>>) -> impl IntoView {
+fn ResultsList(
+    results: ReadSignal<Vec<AozoraWork>>,
+    refresh_library: impl Fn() + Copy + 'static + Send + Sync,
+) -> impl IntoView {
     view! {
-        <section class="results">
-            <h2>"Results"</h2>
+        <details class="results" open=true>
+            <summary><h2>"Results"</h2></summary>
             {move || {
                 let rows = results.get();
                 if rows.is_empty() {
@@ -341,19 +372,88 @@ fn ResultsList(results: ReadSignal<Vec<AozoraWork>>) -> impl IntoView {
                         <ul>
                             {rows.into_iter().map(|w| view! {
                                 <li>
-                                    <ResultRow work=w />
+                                    <ResultRow work=w refresh_library=refresh_library />
                                 </li>
                             }).collect_view()}
                         </ul>
                     }.into_any()
                 }
             }}
-        </section>
+        </details>
     }
 }
 
 #[component]
-fn ResultRow(work: AozoraWork) -> impl IntoView {
+fn LibraryPanel(
+    library: ReadSignal<Vec<LibraryEntry>>,
+    refresh_library: impl Fn() + Copy + 'static + Send + Sync,
+) -> impl IntoView {
+    view! {
+        <details class="library" open=true>
+            <summary>
+                <h2>"Library"</h2>
+                <span class="muted summary-count">
+                    {move || format!("({})", library.get().len())}
+                </span>
+            </summary>
+            {move || {
+                let rows = library.get();
+                if rows.is_empty() {
+                    view! { <p class="muted">"Nothing imported yet — search below and click Import on a work."</p> }.into_any()
+                } else {
+                    view! {
+                        <ul>
+                            {rows.into_iter().map(|e| view! {
+                                <li>
+                                    <LibraryRow entry=e refresh_library=refresh_library />
+                                </li>
+                            }).collect_view()}
+                        </ul>
+                    }.into_any()
+                }
+            }}
+        </details>
+    }
+}
+
+#[component]
+fn LibraryRow(
+    entry: LibraryEntry,
+    refresh_library: impl Fn() + Copy + 'static + Send + Sync,
+) -> impl IntoView {
+    let _ = refresh_library;
+    let title = entry.title.clone();
+    let author = entry.author.clone().unwrap_or_default();
+    let work_id = entry.work_id;
+    let path_for_open = entry.epub_path.clone();
+    let on_open = move |_| {
+        let p = path_for_open.clone();
+        spawn_local(async move {
+            if let Err(e) = invoke_with("open_path", &OpenArgs { path: &p }).await {
+                web_sys::console::error_1(&format!("open: {e}").into());
+            }
+        });
+    };
+
+    view! {
+        <div class="row work">
+            <div class="meta">
+                <div class="title"><strong>{title}</strong></div>
+                <div class="author">{author}</div>
+                <div class="ids muted">"work " {work_id}</div>
+            </div>
+            <div class="actions">
+                <button type="button" on:click=on_open>"Open"</button>
+            </div>
+        </div>
+    }
+}
+
+#[component]
+fn ResultRow(
+    work: AozoraWork,
+    refresh_library: impl Fn() + Copy + 'static + Send + Sync,
+) -> impl IntoView {
     let title = work.title.clone();
     let yomi = work.title_yomi.clone();
     let author = work.author.clone();
@@ -362,6 +462,10 @@ fn ResultRow(work: AozoraWork) -> impl IntoView {
     let stem = work.stem.clone();
     let author_id = work.author_id;
     let work_id = work.work_id;
+
+    let (epub_path, set_epub_path) = signal::<Option<String>>(None);
+    let (importing, set_importing) = signal(false);
+    let (row_error, set_row_error) = signal::<Option<String>>(None);
 
     let stem_for_resolve = stem.clone();
     let on_resolve = move |_| {
@@ -385,19 +489,28 @@ fn ResultRow(work: AozoraWork) -> impl IntoView {
     let stem_present = stem.is_some();
     let on_import = move |_| {
         if !stem_present { return }
+        set_importing.set(true);
+        set_row_error.set(None);
         spawn_local(async move {
-            web_sys::console::log_1(&format!("import work {work_id}…").into());
             match invoke_with("import_aozora_work", &ImportArgs { work_id }).await {
-                Ok(v) => match serde_wasm_bindgen::from_value::<ImportResult>(v.clone()) {
-                    Ok(r) => web_sys::console::log_2(
-                        &format!("imported {}: {}", r.title, r.epub_path).into(),
-                        &v,
-                    ),
-                    Err(e) => web_sys::console::error_1(
-                        &format!("import_aozora_work: bad payload: {e}").into(),
-                    ),
+                Ok(v) => match serde_wasm_bindgen::from_value::<ImportResult>(v) {
+                    Ok(r) => {
+                        set_epub_path.set(Some(r.epub_path));
+                        refresh_library();
+                    }
+                    Err(e) => set_row_error.set(Some(format!("bad payload: {e}"))),
                 },
-                Err(e) => web_sys::console::error_1(&format!("import_aozora_work: {e}").into()),
+                Err(e) => set_row_error.set(Some(e)),
+            }
+            set_importing.set(false);
+        });
+    };
+
+    let on_open = move |_| {
+        let Some(p) = epub_path.get_untracked() else { return };
+        spawn_local(async move {
+            if let Err(e) = invoke_with("open_path", &OpenArgs { path: &p }).await {
+                set_row_error.set(Some(format!("open: {e}")));
             }
         });
     };
@@ -420,8 +533,24 @@ fn ResultRow(work: AozoraWork) -> impl IntoView {
             </div>
             <div class="actions">
                 <button type="button" on:click=on_resolve>"Resolve"</button>
-                <button type="button" on:click=on_import>"Import"</button>
+                {move || if epub_path.get().is_some() {
+                    view! {
+                        <span class="imported-flash">"✓ EPUB"</span>
+                        <button type="button" on:click=on_open>"Open"</button>
+                    }.into_any()
+                } else {
+                    view! {
+                        <button
+                            type="button"
+                            on:click=on_import
+                            prop:disabled=move || importing.get()
+                        >
+                            {move || if importing.get() { "Importing…" } else { "Import" }}
+                        </button>
+                    }.into_any()
+                }}
             </div>
         </div>
+        {move || row_error.get().map(|e| view! { <div class="row-error">{e}</div> })}
     }
 }

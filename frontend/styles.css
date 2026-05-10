@@ -29,10 +29,31 @@ h2 {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: #555;
-  margin: 24px 0 8px;
-  border-bottom: 1px solid #ddd;
-  padding-bottom: 4px;
+  margin: 0;
+  display: inline;
 }
+
+details > summary {
+  list-style: none;
+  cursor: pointer;
+  margin-top: 24px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #ddd;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before {
+  content: "▸";
+  font-size: 0.7em;
+  color: #888;
+  transition: transform 0.1s ease;
+  display: inline-block;
+}
+details[open] > summary::before { transform: rotate(90deg); }
+
+.summary-count { font-size: 0.8em; }
 
 .banner {
   margin: 12px 0;
@@ -115,7 +136,28 @@ button:disabled { color: #999; cursor: default; }
 .work .title { font-size: 1.05em; }
 .work .author { font-size: 0.95em; margin-top: 2px; }
 .work .ids { margin-top: 4px; font-size: 0.82em; }
-.work .actions { display: flex; gap: 6px; align-self: center; }
+.work .actions { display: flex; gap: 6px; align-self: center; align-items: center; }
+.imported-flash {
+  background: #d8f3d8;
+  color: #1f6f2c;
+  border: 1px solid #a4d6a4;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+.row-error {
+  margin: 4px 0 0;
+  padding: 4px 8px;
+  font-size: 0.85em;
+  color: #b03030;
+  background: #fde7e7;
+  border: 1px solid #f4c2c2;
+  border-radius: 4px;
+}
+@media (prefers-color-scheme: dark) {
+  .imported-flash { background: #1d3a23; color: #b6e6c0; border-color: #2c6a3a; }
+  .row-error      { background: #3a1818; color: #f5b3b3; border-color: #5a2424; }
+}
 
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

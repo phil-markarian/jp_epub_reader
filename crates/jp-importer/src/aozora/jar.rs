@@ -56,13 +56,18 @@ pub fn run(
         .canonicalize()
         .map_err(|e| Error::Other(format!("canonicalize out_dir: {e}")))?;
 
-    let output = Command::new(&java.binary)
-        .arg("-jar")
-        .arg("AozoraEpub3.jar")
-        .arg("-d")
+    let mut cmd = Command::new(&java.binary);
+    cmd.arg("-jar").arg("AozoraEpub3.jar");
+    // Apply our project-managed defaults (縦中横 etc.) when present.
+    if jar_dir.join("jp-defaults.ini").exists() {
+        cmd.arg("-i").arg("jp-defaults.ini");
+    }
+    cmd.arg("-d")
         .arg(&out_abs)
         .arg(&txt_abs)
-        .current_dir(jar_dir)
+        .current_dir(jar_dir);
+
+    let output = cmd
         .output()
         .map_err(|e| Error::Other(format!("spawn java: {e}")))?;
 
