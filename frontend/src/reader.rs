@@ -21,6 +21,15 @@ extern "C" {
         on_relocate: JsValue,
         on_load: JsValue,
     ) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "cycleTheme")]
+    fn jp_cycle_theme() -> JsValue;
+
+    #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "next")]
+    fn jp_next();
+
+    #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "prev")]
+    fn jp_prev();
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -94,6 +103,20 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
         });
     });
 
+    let (theme, set_theme) = signal::<&'static str>("light");
+    let on_cycle_theme = move |_| {
+        let v = jp_cycle_theme();
+        let next = v.as_string().unwrap_or_else(|| "light".into());
+        let next: &'static str = match next.as_str() {
+            "dark" => "dark",
+            "sepia" => "sepia",
+            _ => "light",
+        };
+        set_theme.set(next);
+    };
+    let on_prev = move |_| jp_prev();
+    let on_next = move |_| jp_next();
+
     view! {
         <main class="reader-shell">
             <header class="reader-toolbar">
@@ -112,6 +135,16 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                         view! { <span class="muted reader-status">{s}</span> }.into_any()
                     }
                 }}
+                <div class="reader-spacer"></div>
+                <button type="button" class="reader-control" on:click=on_prev title="Previous page (←)">"‹"</button>
+                <button type="button" class="reader-control" on:click=on_next title="Next page (→)">"›"</button>
+                <button type="button" class="reader-control" on:click=on_cycle_theme title="Cycle theme">
+                    {move || match theme.get() {
+                        "dark" => "☾",
+                        "sepia" => "✶",
+                        _ => "☀",
+                    }}
+                </button>
             </header>
 
             <div class="reader-stage" node_ref=stage_ref></div>

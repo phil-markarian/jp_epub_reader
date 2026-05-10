@@ -7,6 +7,30 @@ import "./foliate-js/view.js";
 
 const VERTICAL_DIR = "rtl"; // tategaki books page right-to-left
 
+/** Themed CSS injected into every section iframe. */
+const themeCSS = (theme) => {
+    if (theme === "dark") {
+        return `
+            html, body, * { color: #e8e8e8 !important; background: transparent !important; }
+            html, body { background: #1a1a1a !important; }
+            a:link { color: #8ec5ff !important; }
+        `;
+    }
+    if (theme === "sepia") {
+        return `
+            html, body, * { color: #3b2f1c !important; background: transparent !important; }
+            html, body { background: #f4ecd8 !important; }
+            a:link { color: #6b3d00 !important; }
+        `;
+    }
+    // light (default)
+    return `
+        html, body, * { color: #111 !important; background: transparent !important; }
+        html, body { background: #ffffff !important; }
+        a:link { color: #1a4fb0 !important; }
+    `;
+};
+
 window.__JP_READER = {
     /**
      * @param {HTMLElement} container - element to append the view into
@@ -46,15 +70,20 @@ window.__JP_READER = {
                 renderer.setAttribute("max-inline-size", "720");
                 renderer.setAttribute("max-block-size", "1100");
                 renderer.setAttribute("gap", "5%");
-                // view.open() registers the book but doesn't paint anything;
-                // either init() or a manual next() actually navigates to
-                // the first section. Use renderer.next() to skip cover
-                // logic (Aozora EPUBs don't carry one most of the time).
+                // Force a readable theme; Aozora's EPUB CSS hard-codes
+                // black-on-white which becomes invisible against a dark
+                // app chrome.
+                const initialTheme = window.__JP_READER._theme || "light";
+                renderer.setStyles?.(themeCSS(initialTheme));
+                // view.open() registers the book but doesn't paint
+                // anything; renderer.next() navigates to the first
+                // section.
                 renderer.next?.();
             } else {
                 console.warn("[reader-init] view.renderer not set after open");
             }
 
+            window.__JP_READER._lastView = view;
             return { view };
         } catch (err) {
             console.error("[reader-init] mount failed", err);
@@ -63,9 +92,26 @@ window.__JP_READER = {
     },
 
     /** Navigate the most recently-mounted view. */
-    next(view) { view?.next?.(); },
-    prev(view) { view?.prev?.(); },
-    goTo(view, target) { view?.goTo?.(target); },
+    next(view) { (view ?? window.__JP_READER._lastView)?.next?.(); },
+    prev(view) { (view ?? window.__JP_READER._lastView)?.prev?.(); },
+    goTo(view, target) { (view ?? window.__JP_READER._lastView)?.goTo?.(target); },
+
+    /** Cycle theme: light → dark → sepia → light. */
+    cycleTheme() {
+        const order = ["light", "dark", "sepia"];
+        const cur = window.__JP_READER._theme || "light";
+        const next = order[(order.indexOf(cur) + 1) % order.length];
+        window.__JP_READER._theme = next;
+        const view = window.__JP_READER._lastView;
+        view?.renderer?.setStyles?.(themeCSS(next));
+        return next;
+    },
+
+    setTheme(theme) {
+        window.__JP_READER._theme = theme;
+        const view = window.__JP_READER._lastView;
+        view?.renderer?.setStyles?.(themeCSS(theme));
+    },
 };
 
 // Quiet a Trunk lint about unused exports:
