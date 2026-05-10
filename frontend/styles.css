@@ -115,7 +115,7 @@ button:disabled { color: #999; cursor: default; }
 .work .title { font-size: 1.05em; }
 .work .author { font-size: 0.95em; margin-top: 2px; }
 .work .ids { margin-top: 4px; font-size: 0.82em; }
-.work button { align-self: center; flex: 0 0 auto; }
+.work .actions { display: flex; gap: 6px; align-self: center; }
 
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

@@ -65,14 +65,52 @@ struct ResolveArgs<'a> {
     stem: &'a str,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportArgs {
+    work_id: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ImportResult {
+    epub_path: String,
+    source_id: String,
+    title: String,
+    author: Option<String>,
+    raw_text_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ImporterStatus {
+    java: Option<JavaSummary>,
+    jdk21_bundled: bool,
+    original_bundled: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct JavaSummary {
+    version_string: String,
+    major: u32,
+    binary: String,
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     let (status, set_status) = signal::<Option<AozoraSourceStatus>>(None);
+    let (importer, set_importer) = signal::<Option<ImporterStatus>>(None);
     let (results, set_results) = signal::<Vec<AozoraWork>>(Vec::new());
     let (query, set_query) = signal(String::new());
     let (only_public, set_only_public) = signal(true);
     let (busy, set_busy) = signal(false);
     let (banner, set_banner) = signal::<Option<String>>(None);
+
+    spawn_local(async move {
+        if let Ok(v) = invoke_no_args("get_importer_status").await {
+            if let Ok(s) = serde_wasm_bindgen::from_value::<ImporterStatus>(v) {
+                set_importer.set(Some(s));
+            }
+        }
+    });
 
     let refresh_status = move || {
         spawn_local(async move {
@@ -154,6 +192,7 @@ pub fn App() -> impl IntoView {
             </header>
 
             <SourcesPanel status=status set_banner=set_banner refresh_status=refresh_status />
+            <ImporterStatusLine importer=importer />
 
             {move || banner.get().map(|b| view! { <div class="banner">{b}</div> })}
 
@@ -265,6 +304,30 @@ fn SourcesPanel(
 }
 
 #[component]
+fn ImporterStatusLine(importer: ReadSignal<Option<ImporterStatus>>) -> impl IntoView {
+    view! {
+        <p class="muted">
+            {move || match importer.get() {
+                None => "Importer: checking…".to_string(),
+                Some(s) => {
+                    let java = match s.java {
+                        Some(j) => format!("java {}", j.major),
+                        None => "java MISSING".to_string(),
+                    };
+                    let jars = match (s.jdk21_bundled, s.original_bundled) {
+                        (true, true) => "jdk21 + original".to_string(),
+                        (true, false) => "jdk21".to_string(),
+                        (false, true) => "original".to_string(),
+                        (false, false) => "no jars bundled".to_string(),
+                    };
+                    format!("Importer: {java} · jars: {jars}")
+                }
+            }}
+        </p>
+    }
+}
+
+#[component]
 fn ResultsList(results: ReadSignal<Vec<AozoraWork>>) -> impl IntoView {
     view! {
         <section class="results">
@@ -300,8 +363,9 @@ fn ResultRow(work: AozoraWork) -> impl IntoView {
     let author_id = work.author_id;
     let work_id = work.work_id;
 
+    let stem_for_resolve = stem.clone();
     let on_resolve = move |_| {
-        let Some(stem) = stem.clone() else { return };
+        let Some(stem) = stem_for_resolve.clone() else { return };
         spawn_local(async move {
             let res = invoke_with(
                 "resolve_work",
@@ -311,11 +375,29 @@ fn ResultRow(work: AozoraWork) -> impl IntoView {
                 },
             )
             .await;
-            // Phase 2 will trigger the actual import; for now log the
-            // outcome to the web console so errors aren't silent.
             match res {
                 Ok(v) => web_sys::console::log_2(&"resolve_work ok:".into(), &v),
                 Err(e) => web_sys::console::error_1(&format!("resolve_work: {e}").into()),
+            }
+        });
+    };
+
+    let stem_present = stem.is_some();
+    let on_import = move |_| {
+        if !stem_present { return }
+        spawn_local(async move {
+            web_sys::console::log_1(&format!("import work {work_id}…").into());
+            match invoke_with("import_aozora_work", &ImportArgs { work_id }).await {
+                Ok(v) => match serde_wasm_bindgen::from_value::<ImportResult>(v.clone()) {
+                    Ok(r) => web_sys::console::log_2(
+                        &format!("imported {}: {}", r.title, r.epub_path).into(),
+                        &v,
+                    ),
+                    Err(e) => web_sys::console::error_1(
+                        &format!("import_aozora_work: bad payload: {e}").into(),
+                    ),
+                },
+                Err(e) => web_sys::console::error_1(&format!("import_aozora_work: {e}").into()),
             }
         });
     };
@@ -336,7 +418,10 @@ fn ResultRow(work: AozoraWork) -> impl IntoView {
                     {copyright.then(|| view! { <span class="badge">" © active"</span> })}
                 </div>
             </div>
-            <button type="button" on:click=on_resolve>"Resolve"</button>
+            <div class="actions">
+                <button type="button" on:click=on_resolve>"Resolve"</button>
+                <button type="button" on:click=on_import>"Import"</button>
+            </div>
         </div>
     }
 }
