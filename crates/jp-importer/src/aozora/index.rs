@@ -22,6 +22,9 @@ pub struct AozoraWork {
     pub title_yomi: String,
     pub author: String,
     pub author_yomi: String,
+    /// Romanized surname + given name (e.g. "Natsume Soseki"). Lets users
+    /// find authors via romaji.
+    pub author_romaji: String,
     pub copyright_active: bool,
     /// Zip filename without extension, extracted from CSV column 45.
     /// Used to resolve into the aozorabunko_text repo path.
@@ -123,6 +126,8 @@ pub fn parse_index(csv_path: &Path) -> Result<Vec<AozoraWork>> {
     //   16  名                      given
     //   17  姓読み                  surname_yomi
     //   18  名読み                  given_yomi
+    //   21  姓ローマ字              surname (romaji)
+    //   22  名ローマ字              given (romaji)
     //   23  役割フラグ              role flag ("著者" / "翻訳者" / etc.)
     //   45  テキストファイルURL      text URL (zip)
     //
@@ -145,6 +150,8 @@ pub fn parse_index(csv_path: &Path) -> Result<Vec<AozoraWork>> {
         let given = field(&r, 16);
         let surname_yomi = field(&r, 17);
         let given_yomi = field(&r, 18);
+        let surname_romaji = field(&r, 21);
+        let given_romaji = field(&r, 22);
         let role = field(&r, 23);
         let text_url = Some(field(&r, 45)).filter(|s| !s.is_empty());
 
@@ -155,6 +162,13 @@ pub fn parse_index(csv_path: &Path) -> Result<Vec<AozoraWork>> {
             saw_kokoro = true;
         }
 
+        let author_romaji = match (surname_romaji.is_empty(), given_romaji.is_empty()) {
+            (true, true) => String::new(),
+            (false, true) => surname_romaji.to_string(),
+            (true, false) => given_romaji.to_string(),
+            (false, false) => format!("{surname_romaji} {given_romaji}"),
+        };
+
         let entry = AozoraWork {
             work_id,
             author_id,
@@ -162,6 +176,7 @@ pub fn parse_index(csv_path: &Path) -> Result<Vec<AozoraWork>> {
             title_yomi,
             author: format!("{surname}{given}"),
             author_yomi: format!("{surname_yomi}{given_yomi}"),
+            author_romaji,
             copyright_active,
             stem,
         };
@@ -340,6 +355,7 @@ mod tests {
         cols[16] = given.into();
         cols[17] = surname_yomi.into();
         cols[18] = given_yomi.into();
+        cols[23] = "著者".into();
         cols[45] = text_url.into();
         cols.join(",")
     }

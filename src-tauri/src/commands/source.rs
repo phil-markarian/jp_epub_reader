@@ -23,7 +23,8 @@ pub async fn refresh_index(state: State<'_, AppState>) -> Result<usize, String> 
     Ok(count)
 }
 
-/// Case-insensitive substring search across title/yomi/author/author-yomi.
+/// Case-insensitive substring search across title/yomi/author/yomi/romaji,
+/// scored so exact-title hits surface first.
 #[tauri::command]
 pub fn search_works(
     query: String,
@@ -34,20 +35,63 @@ pub fn search_works(
     let needle = query.trim().to_lowercase();
     let works = state.works.lock().unwrap();
 
-    let iter = works.iter().filter(|w| {
-        if only_public_domain && w.copyright_active {
-            return false;
-        }
-        if needle.is_empty() {
-            return true;
-        }
-        matches(&w.title, &needle)
-            || matches(&w.title_yomi, &needle)
-            || matches(&w.author, &needle)
-            || matches(&w.author_yomi, &needle)
-    });
+    if needle.is_empty() {
+        return works
+            .iter()
+            .filter(|w| !only_public_domain || !w.copyright_active)
+            .take(limit)
+            .cloned()
+            .collect();
+    }
 
-    iter.take(limit).cloned().collect()
+    let mut scored: Vec<(u32, &AozoraWork)> = works
+        .iter()
+        .filter_map(|w| {
+            if only_public_domain && w.copyright_active {
+                return None;
+            }
+            let s = relevance_score(w, &needle)?;
+            Some((s, w))
+        })
+        .collect();
+
+    // Lower score = better match. Ties broken by work_id ascending.
+    scored.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.work_id.cmp(&b.1.work_id)));
+    scored.into_iter().take(limit).map(|(_, w)| w.clone()).collect()
+}
+
+/// Returns Some(score) if any field matches the needle. Lower is better.
+fn relevance_score(w: &AozoraWork, needle: &str) -> Option<u32> {
+    let title_lc = w.title.to_lowercase();
+    if title_lc == needle {
+        return Some(0);
+    }
+    if title_lc.starts_with(needle) {
+        return Some(1);
+    }
+    let title_yomi_lc = w.title_yomi.to_lowercase();
+    if title_yomi_lc == needle {
+        return Some(2);
+    }
+    if title_yomi_lc.starts_with(needle) {
+        return Some(3);
+    }
+    if title_lc.contains(needle) {
+        return Some(4);
+    }
+    if title_yomi_lc.contains(needle) {
+        return Some(5);
+    }
+    let author_lc = w.author.to_lowercase();
+    let author_yomi_lc = w.author_yomi.to_lowercase();
+    let romaji_lc = w.author_romaji.to_lowercase();
+    if author_lc.contains(needle)
+        || author_yomi_lc.contains(needle)
+        || romaji_lc.contains(needle)
+    {
+        return Some(6);
+    }
+    None
 }
 
 /// Persist a path to a local clone of `aozorabunko_text`. Validates the
@@ -129,6 +173,3 @@ pub async fn resolve_work(
     Ok(path.to_string_lossy().into_owned())
 }
 
-fn matches(haystack: &str, needle_lower: &str) -> bool {
-    haystack.to_lowercase().contains(needle_lower)
-}

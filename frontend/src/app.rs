@@ -34,6 +34,8 @@ struct AozoraWork {
     title_yomi: String,
     author: String,
     author_yomi: String,
+    #[serde(default)]
+    author_romaji: String,
     copyright_active: bool,
     stem: Option<String>,
 }
