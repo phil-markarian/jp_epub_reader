@@ -5,6 +5,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -63,6 +64,77 @@ struct LibraryEntry {
 #[serde(rename_all = "camelCase")]
 struct WorkArgs {
     work_id: u32,
+}
+
+const KEYBINDS_LS_KEY: &str = "jp-reader-keybinds";
+
+/// Action ids and their default keys. Each action shows up as one row
+/// in the settings popover.
+#[allow(clippy::type_complexity)]
+const ACTION_DEFAULTS: &[(&str, &str, &[&str])] = &[
+    ("next", "Next page", &["ArrowRight", "ArrowDown", "j", "l", " "]),
+    ("prev", "Previous page", &["ArrowLeft", "ArrowUp", "k", "h"]),
+    ("toggle_flow", "Toggle flow", &["t"]),
+    ("cycle_theme", "Cycle theme", &["d"]),
+    ("font_up", "Larger text", &["+", "="]),
+    ("font_down", "Smaller text", &["-", "_"]),
+    ("toggle_settings", "Settings", &[","]),
+];
+
+type Keybinds = BTreeMap<String, Vec<String>>;
+
+fn defaults() -> Keybinds {
+    ACTION_DEFAULTS
+        .iter()
+        .map(|(id, _, keys)| (id.to_string(), keys.iter().map(|k| (*k).to_string()).collect()))
+        .collect()
+}
+
+fn load_keybinds() -> Keybinds {
+    let stored = web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(KEYBINDS_LS_KEY).ok().flatten());
+    if let Some(json) = stored {
+        if let Ok(map) = serde_json::from_str::<Keybinds>(&json) {
+            // Make sure new actions added in code show up with their defaults.
+            let mut merged = defaults();
+            for (k, v) in map {
+                merged.insert(k, v);
+            }
+            return merged;
+        }
+    }
+    defaults()
+}
+
+fn save_keybinds(kb: &Keybinds) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        if let Ok(json) = serde_json::to_string(kb) {
+            let _ = storage.set_item(KEYBINDS_LS_KEY, &json);
+        }
+    }
+}
+
+fn match_action(kb: &Keybinds, key: &str) -> Option<String> {
+    for (action, keys) in kb {
+        if keys.iter().any(|k| k == key) {
+            return Some(action.clone());
+        }
+    }
+    None
+}
+
+fn label_key(k: &str) -> String {
+    match k {
+        " " => "Space".into(),
+        "ArrowRight" => "→".into(),
+        "ArrowLeft" => "←".into(),
+        "ArrowUp" => "↑".into(),
+        "ArrowDown" => "↓".into(),
+        "Escape" => "Esc".into(),
+        s if s.len() == 1 => s.to_uppercase(),
+        s => s.into(),
+    }
 }
 
 #[component]
@@ -162,7 +234,12 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
 
     let on_toggle_settings = move |_| set_settings_open.update(|v| *v = !*v);
 
-    // Keyboard shortcuts. Attached once via Effect.
+    // Keybind state (loaded from localStorage; falls back to defaults).
+    let (keybinds, set_keybinds) = signal::<Keybinds>(load_keybinds());
+    // When `Some(action)`, the next keypress is recorded for that action.
+    let (capturing, set_capturing) = signal::<Option<String>>(None);
+
+    // Keyboard handler. Attached once via Effect; reads the latest signals.
     let last_key_ms = StoredValue::new(0.0_f64);
     Effect::new(move |_| {
         let Some(window) = web_sys::window() else { return };
@@ -170,32 +247,47 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
             if ev.meta_key() || ev.ctrl_key() || ev.alt_key() {
                 return;
             }
-            // Swallow auto-repeat bursts.
+            let key = ev.key();
+
+            // Capture mode: record this key for the pending action.
+            if let Some(action) = capturing.get_untracked() {
+                ev.prevent_default();
+                if key == "Escape" {
+                    set_capturing.set(None);
+                    return;
+                }
+                set_keybinds.update(|kb| {
+                    let entry = kb.entry(action.clone()).or_default();
+                    if !entry.iter().any(|k| k == &key) {
+                        entry.push(key.clone());
+                    }
+                });
+                save_keybinds(&keybinds.get_untracked());
+                set_capturing.set(None);
+                return;
+            }
+
+            // Auto-repeat throttle.
             let now = js_sys::Date::now();
             if ev.repeat() && now - last_key_ms.get_value() < 80.0 {
                 return;
             }
             last_key_ms.set_value(now);
 
-            let key = ev.key();
-            match key.as_str() {
-                "ArrowRight" | "ArrowDown" | "j" | "J" | "l" | "L" | " " => {
-                    ev.prevent_default();
-                    jp_next();
-                }
-                "ArrowLeft" | "ArrowUp" | "k" | "K" | "h" | "H" => {
-                    ev.prevent_default();
-                    jp_prev();
-                }
-                "t" | "T" => {
-                    ev.prevent_default();
+            let kb = keybinds.get_untracked();
+            let Some(action) = match_action(&kb, &key) else { return };
+            ev.prevent_default();
+
+            match action.as_str() {
+                "next" => jp_next(),
+                "prev" => jp_prev(),
+                "toggle_flow" => {
                     let v = jp_toggle_flow();
                     let next = v.as_string().unwrap_or_else(|| "paginated".into());
                     let next: &'static str = if next == "scrolled" { "scrolled" } else { "paginated" };
                     set_flow.set(next);
                 }
-                "d" | "D" => {
-                    ev.prevent_default();
+                "cycle_theme" => {
                     let v = jp_cycle_theme();
                     let next = v.as_string().unwrap_or_else(|| "light".into());
                     let next: &'static str = match next.as_str() {
@@ -205,22 +297,17 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                     };
                     set_theme.set(next);
                 }
-                "," | "?" => {
-                    ev.prevent_default();
-                    set_settings_open.update(|v| *v = !*v);
-                }
-                "+" | "=" => {
-                    ev.prevent_default();
+                "font_up" => {
                     let v = (font_scale.get_untracked() + 0.05).min(2.0);
                     set_font_scale.set(v);
                     jp_set_font_scale(v);
                 }
-                "-" | "_" => {
-                    ev.prevent_default();
+                "font_down" => {
                     let v = (font_scale.get_untracked() - 0.05).max(0.6);
                     set_font_scale.set(v);
                     jp_set_font_scale(v);
                 }
+                "toggle_settings" => set_settings_open.update(|v| *v = !*v),
                 _ => {}
             }
         }) as Box<dyn FnMut(web_sys::KeyboardEvent)>);
@@ -301,17 +388,12 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                     </label>
 
                     <hr class="reader-settings-divider" />
-                    <div class="reader-keybinds">
-                        <h3>"Keyboard shortcuts"</h3>
-                        <dl>
-                            <dt>"Next page"</dt>      <dd><kbd>"→"</kbd>" "<kbd>"↓"</kbd>" "<kbd>"J"</kbd>" "<kbd>"L"</kbd>" "<kbd>"Space"</kbd></dd>
-                            <dt>"Previous page"</dt>  <dd><kbd>"←"</kbd>" "<kbd>"↑"</kbd>" "<kbd>"K"</kbd>" "<kbd>"H"</kbd></dd>
-                            <dt>"Toggle flow"</dt>    <dd><kbd>"T"</kbd></dd>
-                            <dt>"Cycle theme"</dt>    <dd><kbd>"D"</kbd></dd>
-                            <dt>"Bigger / smaller"</dt><dd><kbd>"+"</kbd>" / "<kbd>"-"</kbd></dd>
-                            <dt>"Settings"</dt>       <dd><kbd>","</kbd></dd>
-                        </dl>
-                    </div>
+                    <KeybindEditor
+                        keybinds=keybinds
+                        set_keybinds=set_keybinds
+                        capturing=capturing
+                        set_capturing=set_capturing
+                    />
                 </div>
             })}
 
@@ -334,6 +416,96 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                 })}
             </div>
         </main>
+    }
+}
+
+#[component]
+fn KeybindEditor(
+    keybinds: ReadSignal<Keybinds>,
+    set_keybinds: WriteSignal<Keybinds>,
+    capturing: ReadSignal<Option<String>>,
+    set_capturing: WriteSignal<Option<String>>,
+) -> impl IntoView {
+    let on_reset = move |_| {
+        set_keybinds.set(defaults());
+        save_keybinds(&keybinds.get_untracked());
+    };
+
+    view! {
+        <div class="reader-keybinds">
+            <div class="reader-keybinds-header">
+                <h3>"Keyboard shortcuts"</h3>
+                <button type="button" class="reader-keybinds-reset" on:click=on_reset>"Reset"</button>
+            </div>
+            <p class="muted reader-keybinds-hint">
+                "Click "<strong>"+"</strong>" to add a key, "<strong>"×"</strong>" to remove. Esc cancels capture."
+            </p>
+            <div class="reader-keybinds-rows">
+                {ACTION_DEFAULTS.iter().map(|(id, label, _)| {
+                    let id = id.to_string();
+                    let label = (*label).to_string();
+                    let id_for_add = id.clone();
+                    let id_for_capture = id.clone();
+                    let on_add = move |_| {
+                        set_capturing.set(Some(id_for_add.clone()));
+                    };
+                    view! {
+                        <div class="reader-keybinds-row">
+                            <span class="reader-keybinds-label">{label}</span>
+                            <span class="reader-keybinds-keys">
+                                {move || {
+                                    let id = id.clone();
+                                    let kb = keybinds.get();
+                                    let keys = kb.get(&id).cloned().unwrap_or_default();
+                                    keys.into_iter().map(|key| {
+                                        let key_for_remove = key.clone();
+                                        let id_for_remove = id.clone();
+                                        let on_remove = move |_| {
+                                            set_keybinds.update(|kb| {
+                                                if let Some(v) = kb.get_mut(&id_for_remove) {
+                                                    v.retain(|k| k != &key_for_remove);
+                                                }
+                                            });
+                                            save_keybinds(&keybinds.get_untracked());
+                                        };
+                                        view! {
+                                            <span class="kbd-chip">
+                                                <kbd>{label_key(&key)}</kbd>
+                                                <button
+                                                    type="button"
+                                                    class="kbd-chip-remove"
+                                                    title="Remove"
+                                                    on:click=on_remove
+                                                >"×"</button>
+                                            </span>
+                                        }
+                                    }).collect_view()
+                                }}
+                                {move || {
+                                    let active = capturing.get().as_deref() == Some(id_for_capture.as_str());
+                                    if active {
+                                        view! {
+                                            <span class="kbd-chip kbd-chip-capturing">
+                                                "Press a key…"
+                                            </span>
+                                        }.into_any()
+                                    } else {
+                                        view! {
+                                            <button
+                                                type="button"
+                                                class="kbd-chip-add"
+                                                on:click=on_add.clone()
+                                                title="Add binding"
+                                            >"+"</button>
+                                        }.into_any()
+                                    }
+                                }}
+                            </span>
+                        </div>
+                    }
+                }).collect_view()}
+            </div>
+        </div>
     }
 }
 

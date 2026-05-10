@@ -387,30 +387,89 @@ html, body { height: 100%; }
   margin: 4px 0;
   width: 100%;
 }
-.reader-keybinds h3 {
-  margin: 0 0 6px;
+.reader-keybinds-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.reader-keybinds-header h3 {
+  margin: 0 0 4px;
   font-size: 0.85em;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--reader-fg);
   opacity: 0.7;
 }
-.reader-keybinds dl {
-  margin: 0;
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 4px 12px;
+.reader-keybinds-reset {
+  margin-left: auto;
+  font-size: 0.78em;
+  padding: 2px 8px;
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  background: transparent;
+  color: inherit;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.reader-keybinds-hint { font-size: 0.78em; margin: 0 0 6px; }
+.reader-keybinds-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   font-size: 0.85em;
 }
-.reader-keybinds dt { font-weight: 500; }
-.reader-keybinds dd { margin: 0; display: flex; gap: 4px; flex-wrap: wrap; }
-.reader-keybinds kbd {
-  padding: 1px 5px;
+.reader-keybinds-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 8px;
+  align-items: center;
+}
+.reader-keybinds-label { font-weight: 500; }
+.reader-keybinds-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.kbd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.kbd-chip kbd {
+  padding: 1px 6px;
   border: 1px solid rgba(127, 127, 127, 0.4);
   border-radius: 4px;
   font: inherit;
   font-size: 0.9em;
-  background: rgba(127, 127, 127, 0.08);
+  background: rgba(127, 127, 127, 0.1);
+}
+.kbd-chip-remove {
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.5;
+  font-size: 0.95em;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+.kbd-chip-remove:hover { opacity: 1; color: #b03030; }
+.kbd-chip-add {
+  font-size: 0.95em;
+  padding: 1px 8px;
+  border: 1px dashed rgba(127, 127, 127, 0.5);
+  background: transparent;
+  color: inherit;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.kbd-chip-add:hover { border-style: solid; border-color: #74a3ff; }
+.kbd-chip-capturing {
+  font-style: italic;
+  font-size: 0.85em;
+  padding: 1px 8px;
+  border: 1px solid #74a3ff;
+  border-radius: 4px;
+  background: rgba(116, 163, 255, 0.12);
 }
 foliate-view {
   display: block;
