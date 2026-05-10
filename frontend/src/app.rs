@@ -250,7 +250,7 @@ pub fn App() -> impl IntoView {
             </section>
 
             <LibraryPanel library=library refresh_library=refresh_library />
-            <ResultsList results=results refresh_library=refresh_library />
+            <ResultsList results=results refresh_library=refresh_library library=library />
         </main>
     }
 }
@@ -359,6 +359,7 @@ fn ImporterStatusLine(importer: ReadSignal<Option<ImporterStatus>>) -> impl Into
 fn ResultsList(
     results: ReadSignal<Vec<AozoraWork>>,
     refresh_library: impl Fn() + Copy + 'static + Send + Sync,
+    library: ReadSignal<Vec<LibraryEntry>>,
 ) -> impl IntoView {
     view! {
         <details class="results" open=true>
@@ -372,7 +373,11 @@ fn ResultsList(
                         <ul>
                             {rows.into_iter().map(|w| view! {
                                 <li>
-                                    <ResultRow work=w refresh_library=refresh_library />
+                                    <ResultRow
+                                        work=w
+                                        refresh_library=refresh_library
+                                        library=library
+                                    />
                                 </li>
                             }).collect_view()}
                         </ul>
@@ -453,6 +458,7 @@ fn LibraryRow(
 fn ResultRow(
     work: AozoraWork,
     refresh_library: impl Fn() + Copy + 'static + Send + Sync,
+    library: ReadSignal<Vec<LibraryEntry>>,
 ) -> impl IntoView {
     let title = work.title.clone();
     let yomi = work.title_yomi.clone();
@@ -489,6 +495,22 @@ fn ResultRow(
     let stem_present = stem.is_some();
     let on_import = move |_| {
         if !stem_present { return }
+        // If this work is already in the library, ask before re-importing.
+        let already_imported = library
+            .get_untracked()
+            .iter()
+            .any(|e| e.work_id == work_id);
+        if already_imported {
+            let msg = format!(
+                "Work {work_id} is already in your library. Re-import and overwrite the existing EPUB?"
+            );
+            let confirmed = web_sys::window()
+                .and_then(|w| w.confirm_with_message(&msg).ok())
+                .unwrap_or(false);
+            if !confirmed {
+                return;
+            }
+        }
         set_importing.set(true);
         set_row_error.set(None);
         spawn_local(async move {
