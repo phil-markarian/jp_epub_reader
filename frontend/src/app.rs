@@ -465,7 +465,7 @@ fn ResultsList(
                             " / "
                             {lp + 1}
                         </span>
-                        <button type="button" on:click=on_next prop:disabled=move || page.get() >= last_page()>"Next ›"</button>
+                        <button type="button" on:click=on_next prop:disabled=move || (page.get() >= last_page())>"Next ›"</button>
                     </div>
                 }.into_any()
             }}
