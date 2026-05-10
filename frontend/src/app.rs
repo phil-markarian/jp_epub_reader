@@ -10,7 +10,7 @@ extern "C" {
 }
 
 async fn invoke_no_args(cmd: &str) -> JsValue {
-    invoke(cmd, JsValue::from_str("{}").into()).await
+    invoke(cmd, js_sys::Object::new().into()).await
 }
 
 async fn invoke_with<T: Serialize>(cmd: &str, args: &T) -> JsValue {
@@ -31,7 +31,6 @@ struct AozoraWork {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct AozoraSourceStatus {
     mode: String,
     repo_path: Option<String>,
