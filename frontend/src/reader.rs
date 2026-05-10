@@ -208,26 +208,8 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
     let on_prev = move |_| jp_prev();
     let on_next = move |_| jp_next();
 
-    // Debounce wheel events so a single trackpad scroll doesn't fly
-    // through 4 pages.
-    let last_wheel_ms = StoredValue::new(0.0_f64);
-    let on_wheel = move |ev: leptos::ev::WheelEvent| {
-        if flow.get() == "scrolled" {
-            // Translate vertical wheel to horizontal scroll for tategaki.
-            ev.prevent_default();
-            jp_wheel_scroll(ev.delta_x(), ev.delta_y());
-            return;
-        }
-        let now = js_sys::Date::now();
-        if now - last_wheel_ms.get_value() < 250.0 {
-            return;
-        }
-        last_wheel_ms.set_value(now);
-        ev.prevent_default();
-        let dy = ev.delta_y() + ev.delta_x();
-        if dy > 0.0 { jp_next(); } else if dy < 0.0 { jp_prev(); }
-    };
-
+    // Wheel handling lives in reader-init.js (it has to attach inside
+    // each section iframe; outer listeners don't see those events).
     let (settings_open, set_settings_open) = signal::<bool>(false);
     let (font_scale, set_font_scale) = signal::<f64>(1.0);
     let (line_height, set_line_height) = signal::<f64>(1.7);
@@ -397,7 +379,7 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                 </div>
             })}
 
-            <div class="reader-stage" node_ref=stage_ref on:wheel=on_wheel>
+            <div class="reader-stage" node_ref=stage_ref>
                 {move || (flow.get() == "paginated").then(|| view! {
                     <button
                         type="button"

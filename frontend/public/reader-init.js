@@ -89,6 +89,38 @@ const applyFlowSizing = (renderer, flow) => {
     }
 };
 
+// Wheel events fire inside the iframe that holds the rendered section
+// content; they don't bubble out to our top-level listeners. Attach
+// the same handler to every section iframe as it loads so the wheel
+// works no matter where the cursor sits.
+let lastWheelMs = 0;
+const onWheelInner = (ev) => {
+    const flow = window.__JP_READER._flow || "paginated";
+    if (flow === "scrolled") {
+        ev.preventDefault();
+        const renderer = window.__JP_READER._lastView?.renderer;
+        const container = renderer?.shadowRoot?.getElementById("container");
+        container?.scrollBy({ left: ev.deltaX + ev.deltaY, top: 0, behavior: "auto" });
+        return;
+    }
+    const now = Date.now();
+    if (now - lastWheelMs < 250) return;
+    const dy = ev.deltaY + ev.deltaX;
+    if (dy === 0) return;
+    lastWheelMs = now;
+    ev.preventDefault();
+    const view = window.__JP_READER._lastView;
+    if (!view) return;
+    if (dy > 0) view.next?.();
+    else view.prev?.();
+};
+
+const attachWheel = (target) => {
+    if (!target || target.__jpWheelAttached) return;
+    target.__jpWheelAttached = true;
+    target.addEventListener("wheel", onWheelInner, { passive: false });
+};
+
 window.__JP_READER = {
     /**
      * @param {HTMLElement} container - element to append the view into
@@ -105,12 +137,18 @@ window.__JP_READER = {
             const view = document.createElement("foliate-view");
             container.append(view);
 
+            // Wire wheel forwarding into each section iframe as it loads.
+            view.addEventListener("load", (e) => {
+                const doc = e.detail?.doc;
+                if (doc) attachWheel(doc);
+                if (typeof onLoad === "function") onLoad(e.detail);
+            });
+
             if (typeof onRelocate === "function") {
                 view.addEventListener("relocate", (e) => onRelocate(e.detail));
             }
-            if (typeof onLoad === "function") {
-                view.addEventListener("load", (e) => onLoad(e.detail));
-            }
+            // Outer container too, for wheel events that land on the chrome.
+            attachWheel(container);
 
             const file = blob instanceof File
                 ? blob
