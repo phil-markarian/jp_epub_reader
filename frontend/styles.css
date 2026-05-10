@@ -314,6 +314,46 @@ html, body { height: 100%; }
   min-height: 0;
   background: var(--reader-bg);
 }
+
+.edge-arrow {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 12%;
+  max-width: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.4em;
+  line-height: 1;
+  border: none;
+  background: transparent;
+  color: var(--reader-fg);
+  opacity: 0.18;
+  cursor: pointer;
+  z-index: 5;
+  user-select: none;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.edge-arrow:hover {
+  opacity: 0.85;
+  background: linear-gradient(
+    to var(--edge-fade-direction, right),
+    rgba(127, 127, 127, 0.18),
+    transparent
+  );
+}
+.edge-prev {
+  left: 0;
+  --edge-fade-direction: right;
+}
+.edge-next {
+  right: 0;
+  --edge-fade-direction: left;
+}
+.edge-next:hover {
+  background: linear-gradient(to left, rgba(127, 127, 127, 0.18), transparent);
+}
 foliate-view {
   display: block;
   position: absolute;

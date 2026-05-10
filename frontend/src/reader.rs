@@ -127,6 +127,23 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
     let on_prev = move |_| jp_prev();
     let on_next = move |_| jp_next();
 
+    // Debounce wheel events so a single trackpad scroll doesn't fly
+    // through 4 pages.
+    let last_wheel_ms = StoredValue::new(0.0_f64);
+    let on_wheel = move |ev: leptos::ev::WheelEvent| {
+        if flow.get() != "paginated" {
+            return;
+        }
+        let now = js_sys::Date::now();
+        if now - last_wheel_ms.get_value() < 250.0 {
+            return;
+        }
+        last_wheel_ms.set_value(now);
+        ev.prevent_default();
+        let dy = ev.delta_y() + ev.delta_x();
+        if dy > 0.0 { jp_next(); } else if dy < 0.0 { jp_prev(); }
+    };
+
     view! {
         <main class="reader-shell">
             <header class="reader-toolbar">
@@ -149,8 +166,6 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                 <button type="button" class="reader-control" on:click=on_toggle_flow title="Toggle paginated / scrolled">
                     {move || if flow.get() == "scrolled" { "⇅" } else { "⇆" }}
                 </button>
-                <button type="button" class="reader-control" on:click=on_prev title="Previous page (←)">"‹"</button>
-                <button type="button" class="reader-control" on:click=on_next title="Next page (→)">"›"</button>
                 <button type="button" class="reader-control" on:click=on_cycle_theme title="Cycle theme">
                     {move || match theme.get() {
                         "dark" => "☾",
@@ -160,7 +175,24 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                 </button>
             </header>
 
-            <div class="reader-stage" node_ref=stage_ref></div>
+            <div class="reader-stage" node_ref=stage_ref on:wheel=on_wheel>
+                {move || (flow.get() == "paginated").then(|| view! {
+                    <button
+                        type="button"
+                        class="edge-arrow edge-prev"
+                        on:click=on_prev
+                        title="Previous page"
+                        aria-label="Previous page"
+                    >"‹"</button>
+                    <button
+                        type="button"
+                        class="edge-arrow edge-next"
+                        on:click=on_next
+                        title="Next page"
+                        aria-label="Next page"
+                    >"›"</button>
+                })}
+            </div>
         </main>
     }
 }
