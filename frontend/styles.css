@@ -261,6 +261,39 @@ button.danger:hover:not(:disabled) {
   border-color: #e07474;
 }
 
+button.primary {
+  color: #fff;
+  background: #3b6dc7;
+  border-color: #3b6dc7;
+}
+button.primary:hover:not(:disabled) {
+  background: #2f5cad;
+  border-color: #2f5cad;
+}
+
+/* Reader window shell */
+.reader-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+.reader-toolbar {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+  padding: 12px 18px;
+  border-bottom: 1px solid #ddd;
+  font-size: 0.92em;
+}
+.reader-title { font-weight: 600; }
+.reader-stage {
+  flex: 1 1 auto;
+  padding: 24px;
+}
+@media (prefers-color-scheme: dark) {
+  .reader-toolbar { border-color: #333; }
+}
+
 .row-error {
   margin: 4px 0 0;
   padding: 4px 8px;

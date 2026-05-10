@@ -96,6 +96,12 @@ struct DeleteArgs {
     delete_files: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenReaderArgs {
+    work_id: u32,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ImportResult {
     epub_path: String,
@@ -791,6 +797,16 @@ fn LibraryRow(
         });
     };
 
+    let on_read = move |_| {
+        spawn_local(async move {
+            if let Err(e) =
+                invoke_with("open_reader_window", &OpenReaderArgs { work_id }).await
+            {
+                web_sys::console::error_1(&format!("open_reader: {e}").into());
+            }
+        });
+    };
+
     // Two-click delete: first click arms; second click within ~3s
     // performs the deletion. Avoids window.confirm (blocked in
     // WKWebView) while still being explicit.
@@ -835,7 +851,8 @@ fn LibraryRow(
                 <div class="ids muted">"work " {work_id}</div>
             </div>
             <div class="actions">
-                <button type="button" on:click=on_open>"Open"</button>
+                <button type="button" on:click=on_read class="primary">"Read"</button>
+                <button type="button" on:click=on_open title="Open with system default (Apple Books)">"Open externally"</button>
                 <button
                     type="button"
                     class="danger"
