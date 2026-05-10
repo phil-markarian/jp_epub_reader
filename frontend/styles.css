@@ -99,15 +99,23 @@ details[open] > summary::before { transform: rotate(90deg); }
   bottom: 18px;
   left: 50%;
   transform: translateX(-50%);
-  pointer-events: none;
+  pointer-events: auto;
+  font: inherit;
   font-size: 0.78em;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #555;
   background: rgba(255, 255, 255, 0.7);
-  padding: 3px 10px;
+  padding: 4px 12px;
   border-radius: 999px;
   border: 1px solid rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.float-section-label:hover {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(0, 0, 0, 0.18);
 }
 
 /* Color-code per section */

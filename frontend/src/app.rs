@@ -351,6 +351,8 @@ pub fn App() -> impl IntoView {
                 lib_page=lib_page
                 set_lib_page=set_lib_page
                 lib_page_size=LIBRARY_PAGE_SIZE
+                results_section=results_section
+                library_section=library_section
             />
         </main>
     }
@@ -575,6 +577,9 @@ fn SmartFloatingPager(
     lib_page: ReadSignal<usize>,
     set_lib_page: WriteSignal<usize>,
     lib_page_size: usize,
+    // For scroll-to-top on label click
+    results_section: NodeRef<html::Details>,
+    library_section: NodeRef<html::Details>,
 ) -> impl IntoView {
     let on_prev = move |_| match active_section.get() {
         "library" => {
@@ -604,6 +609,20 @@ fn SmartFloatingPager(
                 set_results_page.set(p + 1);
                 fetch_results_page(p + 1);
             }
+        }
+    };
+
+    let on_label_click = move |_| {
+        let target = match active_section.get() {
+            "library" => library_section.get(),
+            _ => results_section.get(),
+        };
+        if let Some(el) = target {
+            let html_el: web_sys::HtmlElement = (*el).clone().into();
+            let opts = web_sys::ScrollIntoViewOptions::new();
+            opts.set_behavior(web_sys::ScrollBehavior::Smooth);
+            opts.set_block(web_sys::ScrollLogicalPosition::Start);
+            html_el.scroll_into_view_with_scroll_into_view_options(&opts);
         }
     };
 
@@ -638,7 +657,12 @@ fn SmartFloatingPager(
                         title=format!("Previous page ({label})")
                         aria-label=format!("Previous page in {label}")
                     >"‹"</button>
-                    <div class="float-section-label">{label}</div>
+                    <button
+                        type="button"
+                        class="float-section-label"
+                        on:click=on_label_click
+                        title=format!("Jump to top of {label}")
+                    >{label}</button>
                     <button
                         type="button"
                         class="float-next"
