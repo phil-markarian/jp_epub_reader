@@ -55,15 +55,26 @@ async fn download_index(cache_dir: &Path) -> Result<()> {
     tracing::info!(url = INDEX_URL, "fetching aozora index");
     let bytes = reqwest::get(INDEX_URL)
         .await
-        .map_err(|e| Error::Other(format!("download index: {e}")))?
+        .map_err(|e| Error::Other(format!("download index send: {}", source_chain(&e))))?
         .error_for_status()
-        .map_err(|e| Error::Other(format!("download index: {e}")))?
+        .map_err(|e| Error::Other(format!("download index status: {}", source_chain(&e))))?
         .bytes()
         .await
-        .map_err(|e| Error::Other(format!("download index: {e}")))?;
+        .map_err(|e| Error::Other(format!("download index body: {}", source_chain(&e))))?;
 
     extract_first_csv(&bytes, &cache_dir.join(CACHE_FILE))?;
     Ok(())
+}
+
+fn source_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut s = err.to_string();
+    let mut src = err.source();
+    while let Some(cause) = src {
+        s.push_str(" -> ");
+        s.push_str(&cause.to_string());
+        src = cause.source();
+    }
+    s
 }
 
 fn extract_first_csv(zip_bytes: &[u8], out_path: &Path) -> Result<()> {
