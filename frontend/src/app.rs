@@ -125,12 +125,14 @@ pub fn App() -> impl IntoView {
     let (total, set_total) = signal::<usize>(0);
     let (page, set_page) = signal::<usize>(0);
     let (library, set_library) = signal::<Vec<LibraryEntry>>(Vec::new());
+    let (lib_page, set_lib_page) = signal::<usize>(0);
     let (query, set_query) = signal(String::new());
     let (only_public, set_only_public) = signal(true);
     let (busy, set_busy) = signal(false);
     let (banner, set_banner) = signal::<Option<String>>(None);
 
     const PAGE_SIZE: usize = 50;
+    const LIBRARY_PAGE_SIZE: usize = 25;
 
     let refresh_library = move || {
         spawn_local(async move {
@@ -270,11 +272,24 @@ pub fn App() -> impl IntoView {
                 </label>
             </section>
 
-            <LibraryPanel library=library refresh_library=refresh_library />
+            <LibraryPanel
+                library=library
+                refresh_library=refresh_library
+                page=lib_page
+                set_page=set_lib_page
+                page_size=LIBRARY_PAGE_SIZE
+            />
             <ResultsList
                 results=results
                 refresh_library=refresh_library
                 library=library
+                total=total
+                page=page
+                set_page=set_page
+                fetch_page=fetch_page
+                page_size=PAGE_SIZE
+            />
+            <FloatingPager
                 total=total
                 page=page
                 set_page=set_page
@@ -396,25 +411,6 @@ fn ResultsList(
     fetch_page: impl Fn(usize) + Copy + 'static + Send + Sync,
     page_size: usize,
 ) -> impl IntoView {
-    let last_page = move || {
-        let t = total.get();
-        if t == 0 { 0 } else { (t - 1) / page_size }
-    };
-    let on_prev = move |_| {
-        let p = page.get_untracked();
-        if p > 0 {
-            set_page.set(p - 1);
-            fetch_page(p - 1);
-        }
-    };
-    let on_next = move |_| {
-        let p = page.get_untracked();
-        if p < last_page() {
-            set_page.set(p + 1);
-            fetch_page(p + 1);
-        }
-    };
-
     view! {
         <details class="results" open=true>
             <summary>
@@ -426,6 +422,13 @@ fn ResultsList(
                     }}
                 </span>
             </summary>
+            <PaginationBar
+                total=total
+                page=page
+                set_page=set_page
+                fetch_page=fetch_page
+                page_size=page_size
+            />
             {move || {
                 let rows = results.get();
                 if rows.is_empty() {
@@ -446,30 +449,109 @@ fn ResultsList(
                     }.into_any()
                 }
             }}
-            {move || {
-                let t = total.get();
-                if t == 0 {
-                    return view! { <span></span> }.into_any();
-                }
-                let p = page.get();
-                let lp = last_page();
-                let from = p * page_size + 1;
-                let to = ((p + 1) * page_size).min(t);
-                view! {
-                    <div class="pagination">
-                        <button type="button" on:click=on_prev prop:disabled=move || page.get() == 0>"‹ Prev"</button>
-                        <span class="muted">
-                            {format!("{from}-{to} of {t}")}
-                            " · page "
-                            {p + 1}
-                            " / "
-                            {lp + 1}
-                        </span>
-                        <button type="button" on:click=on_next prop:disabled=move || (page.get() >= last_page())>"Next ›"</button>
-                    </div>
-                }.into_any()
-            }}
+            <PaginationBar
+                total=total
+                page=page
+                set_page=set_page
+                fetch_page=fetch_page
+                page_size=page_size
+            />
         </details>
+    }
+}
+
+#[component]
+fn PaginationBar(
+    total: ReadSignal<usize>,
+    page: ReadSignal<usize>,
+    set_page: WriteSignal<usize>,
+    fetch_page: impl Fn(usize) + Copy + 'static + Send + Sync,
+    page_size: usize,
+) -> impl IntoView {
+    let last_page = move || {
+        let t = total.get();
+        if t == 0 { 0 } else { (t - 1) / page_size }
+    };
+    let on_prev = move |_| {
+        let p = page.get_untracked();
+        if p > 0 { set_page.set(p - 1); fetch_page(p - 1); }
+    };
+    let on_next = move |_| {
+        let p = page.get_untracked();
+        if p < last_page() { set_page.set(p + 1); fetch_page(p + 1); }
+    };
+
+    view! {
+        {move || {
+            let t = total.get();
+            if t == 0 || t <= page_size {
+                return view! { <span></span> }.into_any();
+            }
+            let p = page.get();
+            let lp = last_page();
+            let from = p * page_size + 1;
+            let to = ((p + 1) * page_size).min(t);
+            view! {
+                <div class="pagination">
+                    <button type="button" on:click=on_prev prop:disabled=move || page.get() == 0>"‹ Prev"</button>
+                    <span class="muted">
+                        {format!("{from}-{to} of {t} · page {} / {}", p + 1, lp + 1)}
+                    </span>
+                    <button type="button" on:click=on_next prop:disabled=move || (page.get() >= last_page())>"Next ›"</button>
+                </div>
+            }.into_any()
+        }}
+    }
+}
+
+#[component]
+fn FloatingPager(
+    total: ReadSignal<usize>,
+    page: ReadSignal<usize>,
+    set_page: WriteSignal<usize>,
+    fetch_page: impl Fn(usize) + Copy + 'static + Send + Sync,
+    page_size: usize,
+) -> impl IntoView {
+    let last_page = move || {
+        let t = total.get();
+        if t == 0 { 0 } else { (t - 1) / page_size }
+    };
+    let on_prev = move |_| {
+        let p = page.get_untracked();
+        if p > 0 { set_page.set(p - 1); fetch_page(p - 1); }
+    };
+    let on_next = move |_| {
+        let p = page.get_untracked();
+        if p < last_page() { set_page.set(p + 1); fetch_page(p + 1); }
+    };
+
+    view! {
+        {move || {
+            // Only show when there's actually more than one page.
+            if total.get() <= page_size {
+                return view! { <div></div> }.into_any();
+            }
+            view! {
+                <div class="floating-pager">
+                    <button
+                        type="button"
+                        class="float-prev"
+                        on:click=on_prev
+                        prop:disabled=move || page.get() == 0
+                        title="Previous page"
+                        aria-label="Previous page"
+                    >"‹"</button>
+                    <button
+                        type="button"
+                        class="float-next"
+                        on:click=on_next
+                        prop:disabled=move || (page.get() >= last_page())
+                        title="Next page"
+                        aria-label="Next page"
+                    >"›"</button>
+                </div>
+            }.into_any()
+        }}
     }
 }
 
@@ -477,31 +559,73 @@ fn ResultsList(
 fn LibraryPanel(
     library: ReadSignal<Vec<LibraryEntry>>,
     refresh_library: impl Fn() + Copy + 'static + Send + Sync,
+    page: ReadSignal<usize>,
+    set_page: WriteSignal<usize>,
+    page_size: usize,
 ) -> impl IntoView {
+    let total = move || library.get().len();
+    let last_page = move || {
+        let t = total();
+        if t == 0 { 0 } else { (t - 1) / page_size }
+    };
+    let on_prev = move |_| {
+        let p = page.get_untracked();
+        if p > 0 { set_page.set(p - 1); }
+    };
+    let on_next = move |_| {
+        let p = page.get_untracked();
+        if p < last_page() { set_page.set(p + 1); }
+    };
+    let bar = move || {
+        let t = total();
+        if t <= page_size {
+            return view! { <span></span> }.into_any();
+        }
+        let p = page.get();
+        let from = p * page_size + 1;
+        let to = ((p + 1) * page_size).min(t);
+        view! {
+            <div class="pagination">
+                <button type="button" on:click=on_prev prop:disabled=move || page.get() == 0>"‹ Prev"</button>
+                <span class="muted">
+                    {format!("{from}-{to} of {t} · page {} / {}", p + 1, last_page() + 1)}
+                </span>
+                <button type="button" on:click=on_next prop:disabled=move || (page.get() >= last_page())>"Next ›"</button>
+            </div>
+        }.into_any()
+    };
+
     view! {
         <details class="library" open=true>
             <summary>
                 <h2>"Library"</h2>
                 <span class="muted summary-count">
-                    {move || format!("({})", library.get().len())}
+                    {move || format!("({})", total())}
                 </span>
             </summary>
+            {bar}
             {move || {
                 let rows = library.get();
                 if rows.is_empty() {
-                    view! { <p class="muted">"Nothing imported yet — search below and click Import on a work."</p> }.into_any()
-                } else {
-                    view! {
-                        <ul>
-                            {rows.into_iter().map(|e| view! {
-                                <li>
-                                    <LibraryRow entry=e refresh_library=refresh_library />
-                                </li>
-                            }).collect_view()}
-                        </ul>
-                    }.into_any()
+                    return view! { <p class="muted">"Nothing imported yet — search below and click Import on a work."</p> }.into_any();
                 }
+                let p = page.get();
+                let slice: Vec<LibraryEntry> = rows
+                    .into_iter()
+                    .skip(p * page_size)
+                    .take(page_size)
+                    .collect();
+                view! {
+                    <ul>
+                        {slice.into_iter().map(|e| view! {
+                            <li>
+                                <LibraryRow entry=e refresh_library=refresh_library />
+                            </li>
+                        }).collect_view()}
+                    </ul>
+                }.into_any()
             }}
+            {bar}
         </details>
     }
 }
