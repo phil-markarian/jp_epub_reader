@@ -235,6 +235,7 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
     let (status, set_status) = signal::<String>("Loading…".into());
     let (theme, set_theme) = signal::<&'static str>("light");
     let (flow, set_flow) = signal::<&'static str>("paginated");
+    let (book_fraction, set_book_fraction) = signal::<Option<f64>>(None);
     let stage_ref: NodeRef<leptos::html::Div> = NodeRef::new();
 
     spawn_local(async move {
@@ -274,7 +275,26 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
             };
 
             set_status.set("Rendering…".into());
-            match jp_mount(stage_el, blob, work_id, JsValue::NULL, JsValue::NULL).await {
+            // Build a relocate callback that pushes the book-wide
+            // progress fraction into the bottom-left badge. Foliate
+            // populates detail.fraction via SectionProgress, which is
+            // the position across the whole book (0..1) — not the
+            // section.
+            let relocate_cb = Closure::wrap(Box::new(move |detail: JsValue| {
+                let f = js_sys::Reflect::get(&detail, &JsValue::from_str("fraction"))
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .filter(|v| v.is_finite());
+                if let Some(f) = f {
+                    set_book_fraction.set(Some(f));
+                }
+            }) as Box<dyn FnMut(JsValue)>);
+            let relocate_js: JsValue = relocate_cb.as_ref().clone();
+            // Leak so the listener keeps firing for the window's
+            // lifetime — matches the pattern used by the keyboard
+            // closure below.
+            relocate_cb.forget();
+            match jp_mount(stage_el, blob, work_id, relocate_js, JsValue::NULL).await {
                 Ok(v) => {
                     if let Ok(result) = serde_wasm_bindgen::from_value::<MountResult>(v) {
                         if let Some(flow_name) = result.flow {
@@ -587,6 +607,16 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                         aria-label="Next page"
                     >"›"</button>
                 })}
+            </div>
+
+            <div class="reader-progress" aria-hidden=move || book_fraction.get().is_none().to_string()>
+                {move || book_fraction.get()
+                    .map(|f| {
+                        let pct = ((f * 100.0).round() as i32).clamp(0, 100);
+                        format!("{pct}%")
+                    })
+                    .unwrap_or_else(|| "—".to_string())
+                }
             </div>
 
             {move || bookmarks_open.get().then(|| view! {

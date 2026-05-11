@@ -472,6 +472,27 @@ html, body { height: 100%; }
   background: rgba(116, 163, 255, 0.12);
 }
 
+/* Book-wide reading progress badge */
+.reader-progress {
+  position: fixed;
+  left: 18px;
+  bottom: 18px;
+  z-index: 10;
+  pointer-events: none;
+  user-select: none;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--reader-bg);
+  color: var(--reader-fg);
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  font: 600 1.1em/1.1 -apple-system, "SF Pro Display",
+    "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+  letter-spacing: 0.02em;
+  opacity: 0.92;
+}
+.reader-progress[aria-hidden="true"] { display: none; }
+
 /* Bookmark drawer */
 .bookmark-drawer {
   position: fixed;
