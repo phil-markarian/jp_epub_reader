@@ -129,23 +129,12 @@ const applyFlowSizing = (renderer, flow) => {
 // content; they don't bubble out to our top-level listeners. Attach
 // the same handler to every section iframe as it loads so the wheel
 // works no matter where the cursor sits.
-/* Smooth-scroll with inertia for scrolled mode. macOS trackpad
-   inertia events don't reach the webview through Tauri, so each
-   wheel event adds to a velocity instead of moving the page
-   directly; a rAF loop applies velocity to scrollLeft each frame
-   and decays it geometrically. The result feels like native momentum
-   scrolling regardless of whether the user is on a trackpad or a
-   click-wheel mouse. */
-let scrolledVelocity = 0;
+/* Scrolled mode gets its own transport entirely separate from paginated
+   mode. For vertical-writing books, Foliate's own next/prev(distance)
+   path already knows how to do smooth in-section movement plus section
+   transitions at the edges, so prefer that over manual DOM scrolling. */
 let scrolledContainer = null;
-let scrolledRunning = false;
-// Tuning: at 60fps, decay 0.94 ≈ 0.025x after one second (≈40 frames
-// to bleed off most of the velocity). Gain 0.55 keeps wheel feel near
-// native — a typical click-wheel tick (~120px) lands you a comfortable
-// fraction of a column over the next ~0.3s.
-const SCROLLED_DECAY = 0.94;
-const SCROLLED_GAIN = 0.55;
-const SCROLLED_VELOCITY_FLOOR = 0.25;
+const SCROLLED_KEY_STEP = 220;
 
 const isScrolledFlow = () => (window.__JP_READER._flow || "paginated") === "scrolled";
 const isVerticalWriting = () => window.__JP_READER._verticalWriting !== false;
@@ -175,28 +164,31 @@ const getScrolledContainer = () => {
     return { renderer, container };
 };
 
-const applyVerticalScrolledDelta = (container, delta) => {
-    const before = container.scrollLeft;
-    container.scrollLeft = before + delta;
+const scrollScrolledBy = (delta, smooth = false) => {
+    const { renderer } = getScrolledContainer();
+    const view = window.__JP_READER._lastView;
+    if (!renderer || !view) return false;
 
-    // WebKit/RTL scroll containers can use the opposite sign convention.
-    // If the first attempt produced no movement, try the mirrored sign.
-    if (delta !== 0 && Math.abs(container.scrollLeft - before) < 0.5) {
-        container.scrollLeft = before - delta;
+    if (isVerticalWriting()) {
+        // Vertical-writing scrolled mode moves horizontally; positive
+        // delta means move left/forward, negative means right/backward.
+        const distance = Math.abs(delta);
+        if (distance < 1) return true;
+        if (delta > 0) view.next?.(distance);
+        else view.prev?.(distance);
+        return true;
     }
-};
 
-const applyScrolledDelta = (delta) => {
-    const { renderer, container } = getScrolledContainer();
-    if (!renderer || !container) return false;
+    const { container } = getScrolledContainer();
+    if (!container) return false;
     if (container !== scrolledContainer) {
         scrolledContainer = container;
     }
-    if (isVerticalWriting()) {
-        applyVerticalScrolledDelta(container, delta);
-    } else {
-        renderer.scrollBy?.(delta, 0);
-    }
+    container.scrollBy({
+        left: 0,
+        top: delta,
+        behavior: smooth ? "smooth" : "auto",
+    });
     return true;
 };
 
@@ -204,38 +196,12 @@ const getScrolledKeyStep = () => {
     const { container } = getScrolledContainer();
     if (!container) return 160;
     return isVerticalWriting()
-        ? Math.max(120, container.clientWidth * 0.35)
-        : Math.max(120, container.clientHeight * 0.35);
+        ? Math.max(SCROLLED_KEY_STEP, container.clientWidth * 0.35)
+        : Math.max(SCROLLED_KEY_STEP, container.clientHeight * 0.35);
 };
 
-const smoothScrollLeft = () => scheduleScrolledScroll(-getScrolledKeyStep());
-const smoothScrollRight = () => scheduleScrolledScroll(getScrolledKeyStep());
-
-const scheduleScrolledScroll = (delta) => {
-    if (!applyScrolledDelta(0)) return;
-    // Add delta to current velocity instead of overwriting so fast
-    // repeated flicks accelerate.
-    scrolledVelocity += delta * SCROLLED_GAIN;
-    if (!scrolledRunning) {
-        scrolledRunning = true;
-        requestAnimationFrame(stepScrolledScroll);
-    }
-};
-
-const stepScrolledScroll = () => {
-    if (!scrolledContainer) {
-        scrolledRunning = false;
-        return;
-    }
-    applyScrolledDelta(scrolledVelocity);
-    scrolledVelocity *= SCROLLED_DECAY;
-    if (Math.abs(scrolledVelocity) < SCROLLED_VELOCITY_FLOOR) {
-        scrolledVelocity = 0;
-        scrolledRunning = false;
-        return;
-    }
-    requestAnimationFrame(stepScrolledScroll);
-};
+const smoothScrollLeft = () => scrollScrolledBy(getScrolledKeyStep(), true);
+const smoothScrollRight = () => scrollScrolledBy(-getScrolledKeyStep(), true);
 
 /* In paginated mode, one wheel gesture should generally mean one page
    turn. Trackpad inertia can keep emitting events long after the user
@@ -255,7 +221,7 @@ const WHEEL_MIN_DELTA = 1;
 const onWheelInner = (ev) => {
     if (isScrolledFlow()) {
         ev.preventDefault();
-        scheduleScrolledScroll(wheelDeltaForScrolledMode(ev.deltaX, ev.deltaY));
+        scrollScrolledBy(wheelDeltaForScrolledMode(ev.deltaX, ev.deltaY), false);
         return;
     }
 
@@ -519,7 +485,7 @@ window.__JP_READER = {
      * reading position.
      */
     wheelScroll(deltaX, deltaY) {
-        applyScrolledDelta(wheelDeltaForScrolledMode(deltaX, deltaY));
+        scrollScrolledBy(wheelDeltaForScrolledMode(deltaX, deltaY), false);
     },
 
     /** Toggle paginated / scrolled flow. Returns the new flow. */
