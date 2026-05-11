@@ -82,10 +82,12 @@ const applyFlowSizing = (renderer, flow) => {
         renderer.removeAttribute("max-column-count");
     } else {
         // Tategaki vertical-rl: inline = vertical (column height),
-        // block = horizontal (column width).
+        // block = horizontal (column width). Single column so wheel/
+        // arrow keys advance one page at a time instead of skipping
+        // past two columns simultaneously.
         renderer.setAttribute("max-inline-size", "900");
-        renderer.setAttribute("max-block-size", "1400");
-        renderer.setAttribute("max-column-count", "2");
+        renderer.setAttribute("max-block-size", "900");
+        renderer.setAttribute("max-column-count", "1");
     }
 };
 
@@ -93,22 +95,54 @@ const applyFlowSizing = (renderer, flow) => {
 // content; they don't bubble out to our top-level listeners. Attach
 // the same handler to every section iframe as it loads so the wheel
 // works no matter where the cursor sits.
-let lastWheelMs = 0;
+/* In paginated mode the user is *not* scrolling, they're flipping
+   pages. macOS trackpad inertia keeps sending wheel events for ~1s
+   after a single swipe, so a simple time debounce fires the next
+   page two or three times. Use a "silence lock": when we navigate,
+   set wheelLocked = true and arm a release timer. Every additional
+   wheel event re-arms the timer, so inertia *extends* the lock
+   instead of breaking through it. Lock releases after WHEEL_QUIET_MS
+   of true silence — the user genuinely stopping. */
+let wheelLocked = false;
+let wheelUnlockTimer = null;
+const WHEEL_QUIET_MS = 180;
+const WHEEL_MIN_DELTA = 1;
+
+const armWheelLockRelease = () => {
+    if (wheelUnlockTimer) clearTimeout(wheelUnlockTimer);
+    wheelUnlockTimer = setTimeout(() => {
+        wheelLocked = false;
+        wheelUnlockTimer = null;
+    }, WHEEL_QUIET_MS);
+};
+
 const onWheelInner = (ev) => {
     const flow = window.__JP_READER._flow || "paginated";
+
     if (flow === "scrolled") {
         ev.preventDefault();
         const renderer = window.__JP_READER._lastView?.renderer;
         const container = renderer?.shadowRoot?.getElementById("container");
-        container?.scrollBy({ left: ev.deltaX + ev.deltaY, top: 0, behavior: "auto" });
+        // Vertical wheel → horizontal scroll for tategaki streams.
+        container?.scrollBy({
+            left: ev.deltaX + ev.deltaY,
+            top: 0,
+            behavior: "auto",
+        });
         return;
     }
-    const now = Date.now();
-    if (now - lastWheelMs < 250) return;
-    const dy = ev.deltaY + ev.deltaX;
-    if (dy === 0) return;
-    lastWheelMs = now;
+
+    // Paginated: lock-on-first-event, re-arm on each subsequent.
     ev.preventDefault();
+    if (wheelLocked) {
+        armWheelLockRelease();
+        return;
+    }
+    const dy = ev.deltaY + ev.deltaX;
+    if (Math.abs(dy) < WHEEL_MIN_DELTA) return;
+    wheelLocked = true;
+    armWheelLockRelease();
+
     const view = window.__JP_READER._lastView;
     if (!view) return;
     if (dy > 0) view.next?.();
@@ -123,15 +157,13 @@ const attachAllIframes = (root) => {
         if (!node) return;
         if (node.tagName === "IFRAME") {
             try {
-                const doc = node.contentDocument;
-                if (doc) attachWheel(doc, `iframe-doc(${node.src?.slice(0, 60)})`);
-                if (node.contentWindow) attachWheel(node.contentWindow, "iframe-window");
+                if (node.contentDocument) attachWheel(node.contentDocument);
+                if (node.contentWindow) attachWheel(node.contentWindow);
             } catch (e) {
-                console.warn("[reader-init] cant access iframe", e);
+                // Cross-origin iframe: skip silently.
             }
         }
         if (node.shadowRoot) {
-            node.shadowRoot.querySelectorAll("*").forEach(visit);
             node.shadowRoot.childNodes.forEach(visit);
         }
         node.childNodes?.forEach?.(visit);
@@ -139,11 +171,10 @@ const attachAllIframes = (root) => {
     visit(root);
 };
 
-const attachWheel = (target, label) => {
+const attachWheel = (target) => {
     if (!target || target.__jpWheelAttached) return;
     target.__jpWheelAttached = true;
     target.addEventListener("wheel", onWheelInner, { passive: false });
-    console.log("[reader-init] attached wheel listener to", label || target);
 };
 
 window.__JP_READER = {
@@ -162,18 +193,16 @@ window.__JP_READER = {
             const view = document.createElement("foliate-view");
             container.append(view);
 
-            // Wire wheel forwarding into each section iframe as it loads.
+            // Wheel events fire inside the section iframe and don't
+            // bubble out. Bind on each iframe document as it loads, on
+            // the outer stage container for chrome scrolls, and on the
+            // renderer's #container as a backstop. The shared listener
+            // dedupes via __jpWheelAttached.
             view.addEventListener("load", (e) => {
                 const doc = e.detail?.doc;
-                console.log("[reader-init] section load fired", { hasDoc: !!doc, index: e.detail?.index });
                 if (doc) {
-                    attachWheel(doc, `section-${e.detail?.index ?? "?"}-doc`);
-                    if (doc.defaultView) {
-                        attachWheel(doc.defaultView, `section-${e.detail?.index ?? "?"}-window`);
-                    }
-                    if (doc.documentElement) {
-                        attachWheel(doc.documentElement, `section-${e.detail?.index ?? "?"}-html`);
-                    }
+                    attachWheel(doc);
+                    if (doc.defaultView) attachWheel(doc.defaultView);
                 }
                 if (typeof onLoad === "function") onLoad(e.detail);
             });
@@ -181,9 +210,18 @@ window.__JP_READER = {
             if (typeof onRelocate === "function") {
                 view.addEventListener("relocate", (e) => onRelocate(e.detail));
             }
-            // Outer container too, for wheel events that land on the chrome.
-            attachWheel(container, "stage-container");
-            // Walk the foliate shadow trees for any already-loaded iframes.
+            attachWheel(container);
+            const bindRenderer = () => {
+                const renderer = view.renderer;
+                if (!renderer) return false;
+                attachWheel(renderer);
+                const innerContainer = renderer.shadowRoot?.getElementById("container");
+                if (innerContainer) attachWheel(innerContainer);
+                return true;
+            };
+            if (!bindRenderer()) setTimeout(bindRenderer, 100);
+            // Catch the first iframe if it was already inserted before
+            // we registered the load handler.
             setTimeout(() => attachAllIframes(view), 200);
 
             const file = blob instanceof File
