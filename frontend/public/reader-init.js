@@ -135,6 +135,21 @@ const applyFlowSizing = (renderer, flow) => {
    transitions at the edges, so prefer that over manual DOM scrolling. */
 let scrolledContainer = null;
 const SCROLLED_KEY_STEP = 220;
+const SCROLLED_WHEEL_GAIN = 2.2;
+const SCROLLED_WHEEL_MAX_RATIO = 0.6;
+const SCROLLED_WHEEL_SMOOTHING = 0.2;
+const SCROLLED_WHEEL_DECAY = 0.9;
+const SCROLLED_WHEEL_MIN_VELOCITY = 0.08;
+const SCROLLED_WHEEL_MAX_VELOCITY = 180;
+let scrolledWheelVelocity = 0;
+let scrolledWheelAnimating = false;
+let scrolledWheelCanContinue = true;
+
+const resetScrolledWheelState = () => {
+    scrolledWheelVelocity = 0;
+    scrolledWheelAnimating = false;
+    scrolledWheelCanContinue = true;
+};
 
 const isScrolledFlow = () => (window.__JP_READER._flow || "paginated") === "scrolled";
 const isVerticalWriting = () => window.__JP_READER._verticalWriting !== false;
@@ -147,15 +162,21 @@ const captureLayoutFromDoc = (doc) => {
 };
 
 const wheelDeltaForScrolledMode = (deltaX, deltaY) => {
+    const clampWheelDelta = (delta) => {
+        const max = getScrolledKeyStep() * SCROLLED_WHEEL_MAX_RATIO;
+        return Math.sign(delta) * Math.min(Math.abs(delta), max);
+    };
+
     // Current primary target is vertical-writing books in scrolled mode,
     // which move horizontally. Map gestures to visible left/right intent:
     // down/left => left, up/right => right.
     if (isVerticalWriting()) {
-        return deltaX - deltaY;
+        return clampWheelDelta((deltaY - deltaX) * SCROLLED_WHEEL_GAIN);
     }
     // Fallback for horizontal-writing content: keep a simple primary-axis
     // mapping without affecting the vertical-writing path.
-    return Math.abs(deltaY) >= Math.abs(deltaX) ? deltaY : deltaX;
+    const primary = Math.abs(deltaY) >= Math.abs(deltaX) ? deltaY : deltaX;
+    return clampWheelDelta(primary * SCROLLED_WHEEL_GAIN);
 };
 
 const getScrolledContainer = () => {
@@ -164,31 +185,59 @@ const getScrolledContainer = () => {
     return { renderer, container };
 };
 
-const scrollScrolledBy = (delta, smooth = false) => {
-    const { renderer } = getScrolledContainer();
-    const view = window.__JP_READER._lastView;
-    if (!renderer || !view) return false;
-
-    if (isVerticalWriting()) {
-        // Vertical-writing scrolled mode moves horizontally; positive
-        // delta means move left/forward, negative means right/backward.
-        const distance = Math.abs(delta);
-        if (distance < 1) return true;
-        if (delta > 0) view.next?.(distance);
-        else view.prev?.(distance);
-        return true;
-    }
-
+const applyScrolledWheelStep = (delta) => {
     const { container } = getScrolledContainer();
     if (!container) return false;
     if (container !== scrolledContainer) {
         scrolledContainer = container;
     }
-    container.scrollBy({
-        left: 0,
-        top: delta,
-        behavior: smooth ? "smooth" : "auto",
-    });
+
+    // Drive the inner overflow:auto #container directly. Foliate's
+    // Paginator.scrollBy assumes #scrollBounds is populated by the
+    // paginated codepath; in flow="scrolled" it can be undefined and
+    // the call no-ops or throws. Native scrollBy on the DOM element
+    // is the deterministic target.
+    const beforeLeft = container.scrollLeft;
+    const beforeTop = container.scrollTop;
+    if (isVerticalWriting()) {
+        container.scrollBy({ left: delta, top: 0, behavior: "auto" });
+    } else {
+        container.scrollBy({ left: 0, top: delta, behavior: "auto" });
+    }
+    const afterLeft = container.scrollLeft;
+    const afterTop = container.scrollTop;
+    return (
+        Math.abs(afterLeft - beforeLeft) > 0.5 ||
+        Math.abs(afterTop - beforeTop) > 0.5
+    );
+};
+
+const scrollScrolledByKey = (delta) => {
+    const { container } = getScrolledContainer();
+    if (!container) return false;
+    if (container !== scrolledContainer) {
+        scrolledContainer = container;
+    }
+    // Keyboard movement is independent from the wheel momentum loop.
+    resetScrolledWheelState();
+    const opts = isVerticalWriting()
+        ? { left: delta, top: 0, behavior: "smooth" }
+        : { left: 0, top: delta, behavior: "smooth" };
+    container.scrollBy(opts);
+    return true;
+};
+
+const scrollScrolledBy = (delta, smooth = false) => {
+    const { container } = getScrolledContainer();
+    if (!container) return false;
+    if (container !== scrolledContainer) {
+        scrolledContainer = container;
+    }
+    const behavior = smooth ? "smooth" : "auto";
+    const opts = isVerticalWriting()
+        ? { left: delta, top: 0, behavior }
+        : { left: 0, top: delta, behavior };
+    container.scrollBy(opts);
     return true;
 };
 
@@ -200,8 +249,32 @@ const getScrolledKeyStep = () => {
         : Math.max(SCROLLED_KEY_STEP, container.clientHeight * 0.35);
 };
 
-const smoothScrollLeft = () => scrollScrolledBy(getScrolledKeyStep(), true);
-const smoothScrollRight = () => scrollScrolledBy(-getScrolledKeyStep(), true);
+const smoothScrollLeft = () => scrollScrolledByKey(getScrolledKeyStep());
+const smoothScrollRight = () => scrollScrolledByKey(-getScrolledKeyStep());
+
+const scheduleScrolledWheel = (delta) => {
+    if (Math.abs(delta) < 0.01) return;
+    scrolledWheelVelocity += delta;
+    scrolledWheelVelocity = Math.sign(scrolledWheelVelocity) *
+        Math.min(Math.abs(scrolledWheelVelocity), SCROLLED_WHEEL_MAX_VELOCITY);
+    if (scrolledWheelAnimating) return;
+    scrolledWheelAnimating = true;
+
+    const tick = () => {
+        const step = scrolledWheelVelocity * SCROLLED_WHEEL_SMOOTHING;
+        if (Math.abs(step) >= 0.01) {
+            scrolledWheelCanContinue = applyScrolledWheelStep(step);
+        }
+        scrolledWheelVelocity *= SCROLLED_WHEEL_DECAY;
+        if (Math.abs(scrolledWheelVelocity) < SCROLLED_WHEEL_MIN_VELOCITY) {
+            resetScrolledWheelState();
+            return;
+        }
+        requestAnimationFrame(tick);
+    };
+
+    requestAnimationFrame(tick);
+};
 
 /* In paginated mode, one wheel gesture should generally mean one page
    turn. Trackpad inertia can keep emitting events long after the user
@@ -221,7 +294,13 @@ const WHEEL_MIN_DELTA = 1;
 const onWheelInner = (ev) => {
     if (isScrolledFlow()) {
         ev.preventDefault();
-        scrollScrolledBy(wheelDeltaForScrolledMode(ev.deltaX, ev.deltaY), false);
+        const delta = wheelDeltaForScrolledMode(ev.deltaX, ev.deltaY);
+        if (!scrolledWheelCanContinue && Math.abs(delta) >= 0.5) {
+            resetScrolledWheelState();
+            scrollScrolledBy(delta, false);
+            return;
+        }
+        scheduleScrolledWheel(delta);
         return;
     }
 
@@ -485,7 +564,7 @@ window.__JP_READER = {
      * reading position.
      */
     wheelScroll(deltaX, deltaY) {
-        scrollScrolledBy(wheelDeltaForScrolledMode(deltaX, deltaY), false);
+        scheduleScrolledWheel(wheelDeltaForScrolledMode(deltaX, deltaY));
     },
 
     /** Toggle paginated / scrolled flow. Returns the new flow. */
