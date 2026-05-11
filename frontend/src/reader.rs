@@ -70,6 +70,7 @@ struct WorkArgs {
 #[derive(Clone, Debug, Deserialize)]
 struct MountResult {
     flow: Option<String>,
+    theme: Option<String>,
 }
 
 const KEYBINDS_LS_KEY: &str = "jp-reader-keybinds";
@@ -207,6 +208,14 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                             let restored: &'static str =
                                 if flow_name == "scrolled" { "scrolled" } else { "paginated" };
                             set_flow.set(restored);
+                        }
+                        if let Some(theme_name) = result.theme {
+                            let restored: &'static str = match theme_name.as_str() {
+                                "dark" => "dark",
+                                "sepia" => "sepia",
+                                _ => "light",
+                            };
+                            set_theme.set(restored);
                         }
                     }
                     set_status.set(String::new());

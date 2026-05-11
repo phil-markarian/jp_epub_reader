@@ -388,6 +388,8 @@ window.__JP_READER = {
             window.__JP_READER._workId = workId;
             const saved = loadReaderState(workId);
             window.__JP_READER._flow = saved.flow === "scrolled" ? "scrolled" : "paginated";
+            window.__JP_READER._theme =
+                saved.theme === "dark" || saved.theme === "sepia" ? saved.theme : "light";
 
             const view = document.createElement("foliate-view");
             container.append(view);
@@ -464,7 +466,11 @@ window.__JP_READER = {
             }
 
             window.__JP_READER._lastView = view;
-            return { view, flow: window.__JP_READER._flow || "paginated" };
+            return {
+                view,
+                flow: window.__JP_READER._flow || "paginated",
+                theme: window.__JP_READER._theme || "light",
+            };
         } catch (err) {
             console.error("[reader-init] mount failed", err);
             throw err;
@@ -483,6 +489,7 @@ window.__JP_READER = {
         const cur = window.__JP_READER._theme || "light";
         const next = order[(order.indexOf(cur) + 1) % order.length];
         window.__JP_READER._theme = next;
+        saveReaderState(window.__JP_READER._workId, { theme: next });
         applyChromeColors(next);
         reapplyStyles();
         return next;
@@ -490,6 +497,7 @@ window.__JP_READER = {
 
     setTheme(theme) {
         window.__JP_READER._theme = theme;
+        saveReaderState(window.__JP_READER._workId, { theme });
         applyChromeColors(theme);
         reapplyStyles();
     },
