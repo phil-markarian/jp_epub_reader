@@ -1068,14 +1068,26 @@ export class Paginator extends HTMLElement {
     async #turnPage(dir, distance) {
         if (this.#locked) return
         this.#locked = true
-        const prev = dir === -1
-        const shouldGo = await (prev ? this.#scrollPrev(distance) : this.#scrollNext(distance))
-        if (shouldGo) await this.#goTo({
-            index: this.#adjacentIndex(dir),
-            anchor: prev ? () => 1 : () => 0,
-        })
-        if (shouldGo || !this.hasAttribute('animated')) await wait(100)
-        this.#locked = false
+        try {
+            const prev = dir === -1
+            const shouldGo = await (prev ? this.#scrollPrev(distance) : this.#scrollNext(distance))
+            if (shouldGo) {
+                const nextIndex = this.#adjacentIndex(dir)
+                if (nextIndex != null) {
+                    await this.#goTo({
+                        index: nextIndex,
+                        anchor: prev ? () => 1 : () => 0,
+                    })
+                }
+            }
+            if (shouldGo || !this.hasAttribute('animated')) await wait(100)
+        } finally {
+            // The original implementation could leak #locked=true if a
+            // throw happened during navigation (e.g., adjacentIndex
+            // returning null and then sections[undefined].load() blowing
+            // up). Always release.
+            this.#locked = false
+        }
     }
     prev(distance) {
         return this.#turnPage(-1, distance)
@@ -1127,13 +1139,32 @@ export class Paginator extends HTMLElement {
      * Has no effect outside scrolled flow and outside a loaded view.
      */
     feedWheel(delta) {
-        if (!this.scrolled || !this.#view) return
-        if (!Number.isFinite(delta) || delta === 0) return
+        const reasons = []
+        if (!this.scrolled) reasons.push("not-scrolled")
+        if (!this.#view) reasons.push("no-view")
+        if (!Number.isFinite(delta) || delta === 0) reasons.push("bad-delta")
+        if (reasons.length) {
+            console.log("[paginator] feedWheel skip", { delta, reasons })
+            return
+        }
 
         // Suppress trailing trackpad inertia for a beat after a section
         // transition so we don't immediately cross another section.
         const now = Date.now()
-        if (now < this.#wheelTransitionCooldownUntil) return
+        if (now < this.#wheelTransitionCooldownUntil) {
+            console.log("[paginator] feedWheel cooldown", { remainingMs: this.#wheelTransitionCooldownUntil - now })
+            return
+        }
+        console.log("[paginator] feedWheel", {
+            delta,
+            start: Math.round(this.start),
+            end: Math.round(this.end),
+            viewSize: Math.round(this.viewSize),
+            size: Math.round(this.size),
+            vertical: this.#vertical,
+            scrollProp: this.scrollProp,
+            currentScroll: this.#container[this.scrollProp],
+        })
 
         // Direction reversal cancels prior momentum immediately.
         const newDir = Math.sign(delta)

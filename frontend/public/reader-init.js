@@ -169,6 +169,13 @@ const wheelDeltaForScrolledMode = (deltaX, deltaY) => {
 const feedScrolledWheel = (delta) => {
     if (!delta) return;
     const view = window.__JP_READER._lastView;
+    console.log("[reader] feedScrolledWheel", {
+        delta,
+        hasView: !!view,
+        hasFeedWheel: typeof view?.feedWheel === "function",
+        hasRenderer: !!view?.renderer,
+        rendererHasFeedWheel: typeof view?.renderer?.feedWheel === "function",
+    });
     view?.feedWheel?.(delta);
 };
 
@@ -202,7 +209,14 @@ const WHEEL_MIN_DELTA = 1;
 const onWheelInner = (ev) => {
     if (isScrolledFlow()) {
         ev.preventDefault();
-        feedScrolledWheel(wheelDeltaForScrolledMode(ev.deltaX, ev.deltaY));
+        const delta = wheelDeltaForScrolledMode(ev.deltaX, ev.deltaY);
+        console.log("[reader] wheel", {
+            deltaX: ev.deltaX,
+            deltaY: ev.deltaY,
+            mapped: delta,
+            target: ev.target?.tagName,
+        });
+        feedScrolledWheel(delta);
         return;
     }
 
