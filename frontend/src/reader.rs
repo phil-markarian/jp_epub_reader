@@ -67,6 +67,10 @@ struct WorkArgs {
 }
 
 const KEYBINDS_LS_KEY: &str = "jp-reader-keybinds";
+const KEYBINDS_VERSION_KEY: &str = "jp-reader-keybinds-version";
+/// Bump when changing default keybindings to auto-reset any stale
+/// localStorage entries from the earlier development sessions.
+const KEYBINDS_VERSION: &str = "2";
 
 /// Action ids and their default keys. Each action shows up as one row
 /// in the settings popover.
@@ -91,10 +95,18 @@ fn defaults() -> Keybinds {
 }
 
 fn load_keybinds() -> Keybinds {
-    let stored = web_sys::window()
-        .and_then(|w| w.local_storage().ok().flatten())
-        .and_then(|s| s.get_item(KEYBINDS_LS_KEY).ok().flatten());
-    if let Some(json) = stored {
+    let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else {
+        return defaults();
+    };
+    let version = storage.get_item(KEYBINDS_VERSION_KEY).ok().flatten();
+    if version.as_deref() != Some(KEYBINDS_VERSION) {
+        // Stale localStorage from an older default scheme — wipe and
+        // start over so the user gets the latest sane bindings.
+        let _ = storage.remove_item(KEYBINDS_LS_KEY);
+        let _ = storage.set_item(KEYBINDS_VERSION_KEY, KEYBINDS_VERSION);
+        return defaults();
+    }
+    if let Some(json) = storage.get_item(KEYBINDS_LS_KEY).ok().flatten() {
         if let Ok(map) = serde_json::from_str::<Keybinds>(&json) {
             // Make sure new actions added in code show up with their defaults.
             let mut merged = defaults();
