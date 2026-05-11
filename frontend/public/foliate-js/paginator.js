@@ -1139,32 +1139,13 @@ export class Paginator extends HTMLElement {
      * Has no effect outside scrolled flow and outside a loaded view.
      */
     feedWheel(delta) {
-        const reasons = []
-        if (!this.scrolled) reasons.push("not-scrolled")
-        if (!this.#view) reasons.push("no-view")
-        if (!Number.isFinite(delta) || delta === 0) reasons.push("bad-delta")
-        if (reasons.length) {
-            console.log("[paginator] feedWheel skip", { delta, reasons })
-            return
-        }
+        if (!this.scrolled || !this.#view) return
+        if (!Number.isFinite(delta) || delta === 0) return
 
         // Suppress trailing trackpad inertia for a beat after a section
         // transition so we don't immediately cross another section.
         const now = Date.now()
-        if (now < this.#wheelTransitionCooldownUntil) {
-            console.log("[paginator] feedWheel cooldown", { remainingMs: this.#wheelTransitionCooldownUntil - now })
-            return
-        }
-        console.log("[paginator] feedWheel", {
-            delta,
-            start: Math.round(this.start),
-            end: Math.round(this.end),
-            viewSize: Math.round(this.viewSize),
-            size: Math.round(this.size),
-            vertical: this.#vertical,
-            scrollProp: this.scrollProp,
-            currentScroll: this.#container[this.scrollProp],
-        })
+        if (now < this.#wheelTransitionCooldownUntil) return
 
         // Direction reversal cancels prior momentum immediately.
         const newDir = Math.sign(delta)
