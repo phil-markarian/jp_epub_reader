@@ -6,6 +6,40 @@
 import "./foliate-js/view.js";
 
 const VERTICAL_DIR = "rtl"; // tategaki books page right-to-left
+const READER_STATE_VERSION = 1;
+
+const readerStateKey = (workId) => `jp-reader-state:v${READER_STATE_VERSION}:${workId}`;
+
+const loadReaderState = (workId) => {
+    try {
+        const raw = window.localStorage?.getItem(readerStateKey(workId));
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return typeof parsed === "object" && parsed ? parsed : {};
+    } catch {
+        return {};
+    }
+};
+
+const saveReaderState = (workId, patch) => {
+    if (!workId) return;
+    try {
+        const next = { ...loadReaderState(workId), ...patch };
+        window.localStorage?.setItem(readerStateKey(workId), JSON.stringify(next));
+    } catch {
+        // Best-effort only.
+    }
+};
+
+const savedLocationFromRelocate = (detail) => {
+    if (typeof detail?.cfi === "string" && detail.cfi.length > 0) {
+        return detail.cfi;
+    }
+    if (typeof detail?.fraction === "number") {
+        return { fraction: detail.fraction };
+    }
+    return null;
+};
 
 /** Themed CSS injected into every section iframe. */
 const themeCSS = (theme) => {
@@ -112,7 +146,6 @@ let scrolledRunning = false;
 const SCROLLED_DECAY = 0.94;
 const SCROLLED_GAIN = 0.55;
 const SCROLLED_VELOCITY_FLOOR = 0.25;
-const SCROLLED_KEY_STEP = 120;
 
 const isScrolledFlow = () => (window.__JP_READER._flow || "paginated") === "scrolled";
 const isVerticalWriting = () => window.__JP_READER._verticalWriting !== false;
@@ -136,20 +169,47 @@ const wheelDeltaForScrolledMode = (deltaX, deltaY) => {
     return Math.abs(deltaY) >= Math.abs(deltaX) ? deltaY : deltaX;
 };
 
-const applyScrolledDelta = (delta) => {
+const getScrolledContainer = () => {
     const renderer = window.__JP_READER._lastView?.renderer;
     const container = renderer?.shadowRoot?.getElementById("container");
+    return { renderer, container };
+};
+
+const applyVerticalScrolledDelta = (container, delta) => {
+    const before = container.scrollLeft;
+    container.scrollLeft = before + delta;
+
+    // WebKit/RTL scroll containers can use the opposite sign convention.
+    // If the first attempt produced no movement, try the mirrored sign.
+    if (delta !== 0 && Math.abs(container.scrollLeft - before) < 0.5) {
+        container.scrollLeft = before - delta;
+    }
+};
+
+const applyScrolledDelta = (delta) => {
+    const { renderer, container } = getScrolledContainer();
     if (!renderer || !container) return false;
     if (container !== scrolledContainer) {
         scrolledContainer = container;
     }
     if (isVerticalWriting()) {
-        renderer.scrollBy?.(0, delta);
+        applyVerticalScrolledDelta(container, delta);
     } else {
         renderer.scrollBy?.(delta, 0);
     }
     return true;
 };
+
+const getScrolledKeyStep = () => {
+    const { container } = getScrolledContainer();
+    if (!container) return 160;
+    return isVerticalWriting()
+        ? Math.max(120, container.clientWidth * 0.35)
+        : Math.max(120, container.clientHeight * 0.35);
+};
+
+const smoothScrollLeft = () => scheduleScrolledScroll(-getScrolledKeyStep());
+const smoothScrollRight = () => scheduleScrolledScroll(getScrolledKeyStep());
 
 const scheduleScrolledScroll = (delta) => {
     if (!applyScrolledDelta(0)) return;
@@ -238,14 +298,14 @@ const performReaderAction = (action, key) => {
     if (!view) return false;
 
     if (isScrolledFlow()) {
-        // In horizontal/scrolled mode, left/right should be literal
-        // movement directions rather than logical prev/next page.
-        if (key === "ArrowLeft") {
-            applyScrolledDelta(-SCROLLED_KEY_STEP);
+        // In horizontal/scrolled mode, use literal left/right movement
+        // with smooth scrolling rather than logical prev/next pages.
+        if (["ArrowLeft", "ArrowDown", "h", "j"].includes(key)) {
+            smoothScrollLeft();
             return true;
         }
-        if (key === "ArrowRight") {
-            applyScrolledDelta(SCROLLED_KEY_STEP);
+        if (["ArrowRight", "ArrowUp", "l", "k"].includes(key)) {
+            smoothScrollRight();
             return true;
         }
     }
@@ -321,10 +381,13 @@ window.__JP_READER = {
      * @param {(detail: any) => void} onLoad - called when a section finishes loading
      * @returns {Promise<{ view: HTMLElement }>}
      */
-    async mount(container, blob, onRelocate, onLoad) {
+    async mount(container, blob, workId, onRelocate, onLoad) {
         try {
             // Reset container so re-entries don't stack views.
             container.replaceChildren();
+            window.__JP_READER._workId = workId;
+            const saved = loadReaderState(workId);
+            window.__JP_READER._flow = saved.flow === "scrolled" ? "scrolled" : "paginated";
 
             const view = document.createElement("foliate-view");
             container.append(view);
@@ -348,9 +411,13 @@ window.__JP_READER = {
                 if (typeof onLoad === "function") onLoad(e.detail);
             });
 
-            if (typeof onRelocate === "function") {
-                view.addEventListener("relocate", (e) => onRelocate(e.detail));
-            }
+            view.addEventListener("relocate", (e) => {
+                const savedLocation = savedLocationFromRelocate(e.detail);
+                if (savedLocation != null) {
+                    saveReaderState(workId, { lastLocation: savedLocation });
+                }
+                if (typeof onRelocate === "function") onRelocate(e.detail);
+            });
             attachWheel(container);
             const bindRenderer = () => {
                 const renderer = view.renderer;
@@ -388,16 +455,16 @@ window.__JP_READER = {
                 applyChromeColors(initialTheme);
                 window.__JP_READER._lastView = view;
                 reapplyStyles();
-                // view.open() registers the book but doesn't paint
-                // anything; renderer.next() navigates to the first
-                // section.
-                renderer.next?.();
+                await view.init({
+                    lastLocation: saved.lastLocation ?? null,
+                    showTextStart: false,
+                });
             } else {
                 console.warn("[reader-init] view.renderer not set after open");
             }
 
             window.__JP_READER._lastView = view;
-            return { view };
+            return { view, flow: window.__JP_READER._flow || "paginated" };
         } catch (err) {
             console.error("[reader-init] mount failed", err);
             throw err;
@@ -452,6 +519,7 @@ window.__JP_READER = {
         const cur = window.__JP_READER._flow || "paginated";
         const next = cur === "paginated" ? "scrolled" : "paginated";
         window.__JP_READER._flow = next;
+        saveReaderState(window.__JP_READER._workId, { flow: next });
         const renderer = window.__JP_READER._lastView?.renderer;
         if (renderer) {
             renderer.setAttribute("flow", next);

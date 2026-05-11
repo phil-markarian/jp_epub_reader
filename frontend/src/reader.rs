@@ -19,6 +19,7 @@ extern "C" {
     async fn jp_mount(
         container: web_sys::Element,
         blob: web_sys::Blob,
+        work_id: u32,
         on_relocate: JsValue,
         on_load: JsValue,
     ) -> Result<JsValue, JsValue>;
@@ -64,6 +65,11 @@ struct LibraryEntry {
 #[serde(rename_all = "camelCase")]
 struct WorkArgs {
     work_id: u32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct MountResult {
+    flow: Option<String>,
 }
 
 const KEYBINDS_LS_KEY: &str = "jp-reader-keybinds";
@@ -153,6 +159,8 @@ fn label_key(k: &str) -> String {
 pub fn ReaderApp(work_id: u32) -> impl IntoView {
     let (entry, set_entry) = signal::<Option<LibraryEntry>>(None);
     let (status, set_status) = signal::<String>("Loading…".into());
+    let (theme, set_theme) = signal::<&'static str>("light");
+    let (flow, set_flow) = signal::<&'static str>("paginated");
     let stage_ref: NodeRef<leptos::html::Div> = NodeRef::new();
 
     spawn_local(async move {
@@ -192,15 +200,22 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
             };
 
             set_status.set("Rendering…".into());
-            match jp_mount(stage_el, blob, JsValue::NULL, JsValue::NULL).await {
-                Ok(_) => set_status.set(String::new()),
+            match jp_mount(stage_el, blob, work_id, JsValue::NULL, JsValue::NULL).await {
+                Ok(v) => {
+                    if let Ok(result) = serde_wasm_bindgen::from_value::<MountResult>(v) {
+                        if let Some(flow_name) = result.flow {
+                            let restored: &'static str =
+                                if flow_name == "scrolled" { "scrolled" } else { "paginated" };
+                            set_flow.set(restored);
+                        }
+                    }
+                    set_status.set(String::new());
+                }
                 Err(v) => set_status.set(format!("mount: {}", stringify(&v))),
             }
         });
     });
 
-    let (theme, set_theme) = signal::<&'static str>("light");
-    let (flow, set_flow) = signal::<&'static str>("paginated");
     let on_cycle_theme = move |_| {
         let v = jp_cycle_theme();
         let next = v.as_string().unwrap_or_else(|| "light".into());
@@ -242,6 +257,18 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                 return;
             }
             let key = ev.key();
+
+            // Let the JS reader layer own raw arrow-key behavior first so
+            // scrolled vs paginated mode can diverge cleanly without the
+            // Rust keybind map forcing everything through next/prev.
+            if matches!(
+                key.as_str(),
+                "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"
+            ) && jp_handle_reader_action("arrow", &key)
+            {
+                ev.prevent_default();
+                return;
+            }
 
             // Capture mode: record this key for the pending action.
             if let Some(action) = capturing.get_untracked() {
