@@ -95,18 +95,23 @@ const applyFlowSizing = (renderer, flow) => {
 // content; they don't bubble out to our top-level listeners. Attach
 // the same handler to every section iframe as it loads so the wheel
 // works no matter where the cursor sits.
-/* In scrolled mode we want the wheel to feel smooth, not staircased.
-   Each wheel event fires onWheelInner roughly every 16ms during a
-   gesture; we accumulate the deltas and run an rAF loop that eases
-   the renderer's #container.scrollLeft toward the target. Easing
-   keeps the motion continuous instead of stop/start, and the
-   accumulator drains naturally when the user stops scrolling. */
-let scrolledTarget = 0;
-let scrolledCurrent = 0;
-let scrolledAnimating = false;
+/* Smooth-scroll with inertia for scrolled mode. macOS trackpad
+   inertia events don't reach the webview through Tauri, so each
+   wheel event adds to a velocity instead of moving the page
+   directly; a rAF loop applies velocity to scrollLeft each frame
+   and decays it geometrically. The result feels like native momentum
+   scrolling regardless of whether the user is on a trackpad or a
+   click-wheel mouse. */
+let scrolledVelocity = 0;
 let scrolledContainer = null;
-const SCROLLED_EASING = 0.18;
-const SCROLLED_GAIN = 1.0;
+let scrolledRunning = false;
+// Tuning: at 60fps, decay 0.94 ≈ 0.025x after one second (≈40 frames
+// to bleed off most of the velocity). Gain 0.55 keeps wheel feel near
+// native — a typical click-wheel tick (~120px) lands you a comfortable
+// fraction of a column over the next ~0.3s.
+const SCROLLED_DECAY = 0.94;
+const SCROLLED_GAIN = 0.55;
+const SCROLLED_VELOCITY_FLOOR = 0.25;
 
 const scheduleScrolledScroll = (delta) => {
     const renderer = window.__JP_READER._lastView?.renderer;
@@ -114,36 +119,40 @@ const scheduleScrolledScroll = (delta) => {
     if (!container) return;
     if (container !== scrolledContainer) {
         scrolledContainer = container;
-        scrolledCurrent = container.scrollLeft;
-        scrolledTarget = scrolledCurrent;
+        scrolledVelocity = 0;
     }
-    scrolledTarget += delta * SCROLLED_GAIN;
-    // Clamp into the renderer's actual scroll range so we don't drift
-    // off the edges into invisible work.
-    const max = container.scrollWidth - container.clientWidth;
-    if (scrolledTarget < 0) scrolledTarget = 0;
-    if (scrolledTarget > max) scrolledTarget = max;
-    if (!scrolledAnimating) {
-        scrolledAnimating = true;
+    // Add delta to current velocity instead of overwriting so fast
+    // repeated flicks accelerate.
+    scrolledVelocity += delta * SCROLLED_GAIN;
+    if (!scrolledRunning) {
+        scrolledRunning = true;
         requestAnimationFrame(stepScrolledScroll);
     }
 };
 
 const stepScrolledScroll = () => {
     if (!scrolledContainer) {
-        scrolledAnimating = false;
+        scrolledRunning = false;
         return;
     }
-    const diff = scrolledTarget - scrolledCurrent;
-    if (Math.abs(diff) < 0.5) {
-        // Snap to target, finish.
-        scrolledContainer.scrollLeft = scrolledTarget;
-        scrolledCurrent = scrolledTarget;
-        scrolledAnimating = false;
+    const max = scrolledContainer.scrollWidth - scrolledContainer.clientWidth;
+    let next = scrolledContainer.scrollLeft + scrolledVelocity;
+    // Edge-clamp + kill velocity at the boundary so we don't bang the
+    // scroll position against the wall every frame.
+    if (next < 0) {
+        next = 0;
+        scrolledVelocity = 0;
+    } else if (next > max) {
+        next = max;
+        scrolledVelocity = 0;
+    }
+    scrolledContainer.scrollLeft = next;
+    scrolledVelocity *= SCROLLED_DECAY;
+    if (Math.abs(scrolledVelocity) < SCROLLED_VELOCITY_FLOOR) {
+        scrolledVelocity = 0;
+        scrolledRunning = false;
         return;
     }
-    scrolledCurrent += diff * SCROLLED_EASING;
-    scrolledContainer.scrollLeft = scrolledCurrent;
     requestAnimationFrame(stepScrolledScroll);
 };
 
