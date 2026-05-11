@@ -112,15 +112,31 @@ let scrolledRunning = false;
 const SCROLLED_DECAY = 0.94;
 const SCROLLED_GAIN = 0.55;
 const SCROLLED_VELOCITY_FLOOR = 0.25;
+const SCROLLED_KEY_STEP = 120;
 
-const scheduleScrolledScroll = (delta) => {
+// In horizontal scrolled reading, treat both vertical and horizontal
+// trackpad gestures as left/right intent:
+// - down  => move left
+// - up    => move right
+// - left  => move left
+// - right => move right
+const horizontalGestureDelta = (deltaX, deltaY) => deltaX - deltaY;
+
+const applyScrolledDelta = (delta) => {
     const renderer = window.__JP_READER._lastView?.renderer;
     const container = renderer?.shadowRoot?.getElementById("container");
-    if (!container) return;
+    if (!renderer || !container) return false;
     if (container !== scrolledContainer) {
         scrolledContainer = container;
-        scrolledVelocity = 0;
     }
+    // Feed the same delta into both axes and let Foliate pick the
+    // correct scroll axis internally based on the book's writing mode.
+    renderer.scrollBy?.(delta, delta);
+    return true;
+};
+
+const scheduleScrolledScroll = (delta) => {
+    if (!applyScrolledDelta(0)) return;
     // Add delta to current velocity instead of overwriting so fast
     // repeated flicks accelerate.
     scrolledVelocity += delta * SCROLLED_GAIN;
@@ -135,18 +151,7 @@ const stepScrolledScroll = () => {
         scrolledRunning = false;
         return;
     }
-    const max = scrolledContainer.scrollWidth - scrolledContainer.clientWidth;
-    let next = scrolledContainer.scrollLeft + scrolledVelocity;
-    // Edge-clamp + kill velocity at the boundary so we don't bang the
-    // scroll position against the wall every frame.
-    if (next < 0) {
-        next = 0;
-        scrolledVelocity = 0;
-    } else if (next > max) {
-        next = max;
-        scrolledVelocity = 0;
-    }
-    scrolledContainer.scrollLeft = next;
+    applyScrolledDelta(scrolledVelocity);
     scrolledVelocity *= SCROLLED_DECAY;
     if (Math.abs(scrolledVelocity) < SCROLLED_VELOCITY_FLOOR) {
         scrolledVelocity = 0;
@@ -156,51 +161,103 @@ const stepScrolledScroll = () => {
     requestAnimationFrame(stepScrolledScroll);
 };
 
-/* In paginated mode the user is *not* scrolling, they're flipping
-   pages. macOS trackpad inertia keeps sending wheel events for ~1s
-   after a single swipe, so a simple time debounce fires the next
-   page two or three times. Use a "silence lock": when we navigate,
-   set wheelLocked = true and arm a release timer. Every additional
-   wheel event re-arms the timer, so inertia *extends* the lock
-   instead of breaking through it. Lock releases after WHEEL_QUIET_MS
-   of true silence — the user genuinely stopping. */
-let wheelLocked = false;
-let wheelUnlockTimer = null;
-const WHEEL_QUIET_MS = 180;
+/* In paginated mode, one wheel gesture should generally mean one page
+   turn. Trackpad inertia can keep emitting events long after the user
+   stops touching the pad, so we treat nearby same-direction events as
+   one gesture burst and allow at most one page flip within that burst.
+   A new burst starts only after a brief quiet gap or a direction
+   change, which forces a small stop between page turns and prevents
+   inertia from spilling into extra pages. */
+let paginatedCarry = 0;
+let paginatedBurstDirection = 0;
+let paginatedLastEventAt = 0;
+let paginatedBurstTurned = false;
+const PAGE_TURN_THRESHOLD = 110;
+const PAGE_BURST_GAP_MS = 30;
 const WHEEL_MIN_DELTA = 1;
-
-const armWheelLockRelease = () => {
-    if (wheelUnlockTimer) clearTimeout(wheelUnlockTimer);
-    wheelUnlockTimer = setTimeout(() => {
-        wheelLocked = false;
-        wheelUnlockTimer = null;
-    }, WHEEL_QUIET_MS);
-};
 
 const onWheelInner = (ev) => {
     const flow = window.__JP_READER._flow || "paginated";
 
     if (flow === "scrolled") {
         ev.preventDefault();
-        scheduleScrolledScroll(ev.deltaX + ev.deltaY);
+        scheduleScrolledScroll(horizontalGestureDelta(ev.deltaX, ev.deltaY));
         return;
     }
 
-    // Paginated: lock-on-first-event, re-arm on each subsequent.
+    // Paginated: treat the wheel stream as repeated "next/prev page"
+    // intent instead of requiring the gesture to fully quiet down.
     ev.preventDefault();
-    if (wheelLocked) {
-        armWheelLockRelease();
-        return;
-    }
     const dy = ev.deltaY + ev.deltaX;
     if (Math.abs(dy) < WHEEL_MIN_DELTA) return;
-    wheelLocked = true;
-    armWheelLockRelease();
 
     const view = window.__JP_READER._lastView;
     if (!view) return;
-    if (dy > 0) view.next?.();
+
+    const now = performance.now();
+    const dir = Math.sign(dy);
+    const quietGap = now - paginatedLastEventAt;
+    const shouldStartNewBurst =
+        paginatedBurstDirection === 0 ||
+        dir !== paginatedBurstDirection ||
+        quietGap > PAGE_BURST_GAP_MS;
+
+    if (shouldStartNewBurst) {
+        paginatedCarry = 0;
+        paginatedBurstDirection = dir;
+        paginatedBurstTurned = false;
+    }
+
+    paginatedLastEventAt = now;
+    if (paginatedBurstTurned) return;
+
+    paginatedCarry += dy;
+    if (Math.abs(paginatedCarry) < PAGE_TURN_THRESHOLD) return;
+
+    paginatedBurstTurned = true;
+    if (dir > 0) view.next?.();
     else view.prev?.();
+};
+
+const performReaderAction = (action, key) => {
+    const view = window.__JP_READER._lastView;
+    if (!view) return false;
+
+    const flow = window.__JP_READER._flow || "paginated";
+    if (flow === "scrolled") {
+        // In horizontal/scrolled mode, left/right should be literal
+        // movement directions rather than logical prev/next page.
+        if (key === "ArrowLeft") {
+            applyScrolledDelta(-SCROLLED_KEY_STEP);
+            return true;
+        }
+        if (key === "ArrowRight") {
+            applyScrolledDelta(SCROLLED_KEY_STEP);
+            return true;
+        }
+    }
+
+    if (action === "next") {
+        view.next?.();
+        return true;
+    }
+    if (action === "prev") {
+        view.prev?.();
+        return true;
+    }
+    return false;
+};
+
+const onKeyNavInner = (ev) => {
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+
+    if (ev.key === "ArrowDown" || ev.key === "ArrowRight") {
+        ev.preventDefault();
+        performReaderAction("next", ev.key);
+    } else if (ev.key === "ArrowUp" || ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        performReaderAction("prev", ev.key);
+    }
 };
 
 // Some iframes are created before the load event we hook into; sweep
@@ -211,8 +268,14 @@ const attachAllIframes = (root) => {
         if (!node) return;
         if (node.tagName === "IFRAME") {
             try {
-                if (node.contentDocument) attachWheel(node.contentDocument);
-                if (node.contentWindow) attachWheel(node.contentWindow);
+                if (node.contentDocument) {
+                    attachWheel(node.contentDocument);
+                    attachKeyNav(node.contentDocument);
+                }
+                if (node.contentWindow) {
+                    attachWheel(node.contentWindow);
+                    attachKeyNav(node.contentWindow);
+                }
             } catch (e) {
                 // Cross-origin iframe: skip silently.
             }
@@ -229,6 +292,12 @@ const attachWheel = (target) => {
     if (!target || target.__jpWheelAttached) return;
     target.__jpWheelAttached = true;
     target.addEventListener("wheel", onWheelInner, { passive: false });
+};
+
+const attachKeyNav = (target) => {
+    if (!target || target.__jpKeyNavAttached) return;
+    target.__jpKeyNavAttached = true;
+    target.addEventListener("keydown", onKeyNavInner, { capture: true });
 };
 
 window.__JP_READER = {
@@ -256,7 +325,11 @@ window.__JP_READER = {
                 const doc = e.detail?.doc;
                 if (doc) {
                     attachWheel(doc);
-                    if (doc.defaultView) attachWheel(doc.defaultView);
+                    attachKeyNav(doc);
+                    if (doc.defaultView) {
+                        attachWheel(doc.defaultView);
+                        attachKeyNav(doc.defaultView);
+                    }
                 }
                 if (typeof onLoad === "function") onLoad(e.detail);
             });
@@ -321,6 +394,7 @@ window.__JP_READER = {
     next(view) { (view ?? window.__JP_READER._lastView)?.next?.(); },
     prev(view) { (view ?? window.__JP_READER._lastView)?.prev?.(); },
     goTo(view, target) { (view ?? window.__JP_READER._lastView)?.goTo?.(target); },
+    handleReaderAction(action, key) { return performReaderAction(action, key); },
 
     /** Cycle theme: light → dark → sepia → light. */
     cycleTheme() {
@@ -356,10 +430,7 @@ window.__JP_READER = {
      * reading position.
      */
     wheelScroll(deltaX, deltaY) {
-        const renderer = window.__JP_READER._lastView?.renderer;
-        const container = renderer?.shadowRoot?.getElementById("container");
-        if (!container) return;
-        container.scrollBy({ left: deltaX + deltaY, top: 0, behavior: "auto" });
+        applyScrolledDelta(horizontalGestureDelta(deltaX, deltaY));
     },
 
     /** Toggle paginated / scrolled flow. Returns the new flow. */

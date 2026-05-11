@@ -35,8 +35,8 @@ extern "C" {
     #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "prev")]
     fn jp_prev();
 
-    #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "wheelScroll")]
-    fn jp_wheel_scroll(dx: f64, dy: f64);
+    #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "handleReaderAction")]
+    fn jp_handle_reader_action(action: &str, key: &str) -> bool;
 
     #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "setFontScale")]
     fn jp_set_font_scale(scale: f64);
@@ -273,8 +273,16 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
             ev.prevent_default();
 
             match action.as_str() {
-                "next" => jp_next(),
-                "prev" => jp_prev(),
+                "next" => {
+                    if !jp_handle_reader_action("next", &key) {
+                        jp_next();
+                    }
+                }
+                "prev" => {
+                    if !jp_handle_reader_action("prev", &key) {
+                        jp_prev();
+                    }
+                }
                 "toggle_flow" => {
                     let v = jp_toggle_flow();
                     let next = v.as_string().unwrap_or_else(|| "paginated".into());
