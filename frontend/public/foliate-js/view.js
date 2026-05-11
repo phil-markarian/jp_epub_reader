@@ -251,11 +251,16 @@ export class View extends HTMLElement {
         }
 
         this.isFixedLayout = this.book.rendition?.layout === 'pre-paginated'
+        // Cache-bust the renderer modules during dev. WKWebView caches
+        // dynamic imports by URL, and we patch these vendored files
+        // often enough that a stale paginator.js silently shadowing the
+        // new one is more painful than the duplicate fetch.
+        const cb = `?v=${Date.now()}`
         if (this.isFixedLayout) {
-            await import('./fixed-layout.js')
+            await import('./fixed-layout.js' + cb)
             this.renderer = document.createElement('foliate-fxl')
         } else {
-            await import('./paginator.js')
+            await import('./paginator.js' + cb)
             this.renderer = document.createElement('foliate-paginator')
         }
         this.renderer.setAttribute('exportparts', 'head,foot,filter')
