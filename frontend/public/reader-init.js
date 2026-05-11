@@ -114,13 +114,27 @@ const SCROLLED_GAIN = 0.55;
 const SCROLLED_VELOCITY_FLOOR = 0.25;
 const SCROLLED_KEY_STEP = 120;
 
-// In horizontal scrolled reading, treat both vertical and horizontal
-// trackpad gestures as left/right intent:
-// - down  => move left
-// - up    => move right
-// - left  => move left
-// - right => move right
-const horizontalGestureDelta = (deltaX, deltaY) => deltaX - deltaY;
+const isScrolledFlow = () => (window.__JP_READER._flow || "paginated") === "scrolled";
+const isVerticalWriting = () => window.__JP_READER._verticalWriting !== false;
+
+const captureLayoutFromDoc = (doc) => {
+    if (!doc?.defaultView) return;
+    const { writingMode } = doc.defaultView.getComputedStyle(doc.body);
+    window.__JP_READER._verticalWriting =
+        writingMode === "vertical-rl" || writingMode === "vertical-lr";
+};
+
+const wheelDeltaForScrolledMode = (deltaX, deltaY) => {
+    // Current primary target is vertical-writing books in scrolled mode,
+    // which move horizontally. Map gestures to visible left/right intent:
+    // down/left => left, up/right => right.
+    if (isVerticalWriting()) {
+        return deltaX - deltaY;
+    }
+    // Fallback for horizontal-writing content: keep a simple primary-axis
+    // mapping without affecting the vertical-writing path.
+    return Math.abs(deltaY) >= Math.abs(deltaX) ? deltaY : deltaX;
+};
 
 const applyScrolledDelta = (delta) => {
     const renderer = window.__JP_READER._lastView?.renderer;
@@ -129,9 +143,11 @@ const applyScrolledDelta = (delta) => {
     if (container !== scrolledContainer) {
         scrolledContainer = container;
     }
-    // Feed the same delta into both axes and let Foliate pick the
-    // correct scroll axis internally based on the book's writing mode.
-    renderer.scrollBy?.(delta, delta);
+    if (isVerticalWriting()) {
+        renderer.scrollBy?.(0, delta);
+    } else {
+        renderer.scrollBy?.(delta, 0);
+    }
     return true;
 };
 
@@ -177,11 +193,9 @@ const PAGE_BURST_GAP_MS = 30;
 const WHEEL_MIN_DELTA = 1;
 
 const onWheelInner = (ev) => {
-    const flow = window.__JP_READER._flow || "paginated";
-
-    if (flow === "scrolled") {
+    if (isScrolledFlow()) {
         ev.preventDefault();
-        scheduleScrolledScroll(horizontalGestureDelta(ev.deltaX, ev.deltaY));
+        scheduleScrolledScroll(wheelDeltaForScrolledMode(ev.deltaX, ev.deltaY));
         return;
     }
 
@@ -223,8 +237,7 @@ const performReaderAction = (action, key) => {
     const view = window.__JP_READER._lastView;
     if (!view) return false;
 
-    const flow = window.__JP_READER._flow || "paginated";
-    if (flow === "scrolled") {
+    if (isScrolledFlow()) {
         // In horizontal/scrolled mode, left/right should be literal
         // movement directions rather than logical prev/next page.
         if (key === "ArrowLeft") {
@@ -324,6 +337,7 @@ window.__JP_READER = {
             view.addEventListener("load", (e) => {
                 const doc = e.detail?.doc;
                 if (doc) {
+                    captureLayoutFromDoc(doc);
                     attachWheel(doc);
                     attachKeyNav(doc);
                     if (doc.defaultView) {
@@ -430,7 +444,7 @@ window.__JP_READER = {
      * reading position.
      */
     wheelScroll(deltaX, deltaY) {
-        applyScrolledDelta(horizontalGestureDelta(deltaX, deltaY));
+        applyScrolledDelta(wheelDeltaForScrolledMode(deltaX, deltaY));
     },
 
     /** Toggle paginated / scrolled flow. Returns the new flow. */
