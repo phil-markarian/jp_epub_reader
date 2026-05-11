@@ -95,6 +95,58 @@ const applyFlowSizing = (renderer, flow) => {
 // content; they don't bubble out to our top-level listeners. Attach
 // the same handler to every section iframe as it loads so the wheel
 // works no matter where the cursor sits.
+/* In scrolled mode we want the wheel to feel smooth, not staircased.
+   Each wheel event fires onWheelInner roughly every 16ms during a
+   gesture; we accumulate the deltas and run an rAF loop that eases
+   the renderer's #container.scrollLeft toward the target. Easing
+   keeps the motion continuous instead of stop/start, and the
+   accumulator drains naturally when the user stops scrolling. */
+let scrolledTarget = 0;
+let scrolledCurrent = 0;
+let scrolledAnimating = false;
+let scrolledContainer = null;
+const SCROLLED_EASING = 0.18;
+const SCROLLED_GAIN = 1.0;
+
+const scheduleScrolledScroll = (delta) => {
+    const renderer = window.__JP_READER._lastView?.renderer;
+    const container = renderer?.shadowRoot?.getElementById("container");
+    if (!container) return;
+    if (container !== scrolledContainer) {
+        scrolledContainer = container;
+        scrolledCurrent = container.scrollLeft;
+        scrolledTarget = scrolledCurrent;
+    }
+    scrolledTarget += delta * SCROLLED_GAIN;
+    // Clamp into the renderer's actual scroll range so we don't drift
+    // off the edges into invisible work.
+    const max = container.scrollWidth - container.clientWidth;
+    if (scrolledTarget < 0) scrolledTarget = 0;
+    if (scrolledTarget > max) scrolledTarget = max;
+    if (!scrolledAnimating) {
+        scrolledAnimating = true;
+        requestAnimationFrame(stepScrolledScroll);
+    }
+};
+
+const stepScrolledScroll = () => {
+    if (!scrolledContainer) {
+        scrolledAnimating = false;
+        return;
+    }
+    const diff = scrolledTarget - scrolledCurrent;
+    if (Math.abs(diff) < 0.5) {
+        // Snap to target, finish.
+        scrolledContainer.scrollLeft = scrolledTarget;
+        scrolledCurrent = scrolledTarget;
+        scrolledAnimating = false;
+        return;
+    }
+    scrolledCurrent += diff * SCROLLED_EASING;
+    scrolledContainer.scrollLeft = scrolledCurrent;
+    requestAnimationFrame(stepScrolledScroll);
+};
+
 /* In paginated mode the user is *not* scrolling, they're flipping
    pages. macOS trackpad inertia keeps sending wheel events for ~1s
    after a single swipe, so a simple time debounce fires the next
@@ -121,14 +173,7 @@ const onWheelInner = (ev) => {
 
     if (flow === "scrolled") {
         ev.preventDefault();
-        const renderer = window.__JP_READER._lastView?.renderer;
-        const container = renderer?.shadowRoot?.getElementById("container");
-        // Vertical wheel → horizontal scroll for tategaki streams.
-        container?.scrollBy({
-            left: ev.deltaX + ev.deltaY,
-            top: 0,
-            behavior: "auto",
-        });
+        scheduleScrolledScroll(ev.deltaX + ev.deltaY);
         return;
     }
 
