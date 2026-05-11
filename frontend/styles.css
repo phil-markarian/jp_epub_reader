@@ -471,6 +471,125 @@ html, body { height: 100%; }
   border-radius: 4px;
   background: rgba(116, 163, 255, 0.12);
 }
+
+/* Bookmark drawer */
+.bookmark-drawer {
+  position: fixed;
+  top: 56px;
+  right: 12px;
+  bottom: 12px;
+  width: min(360px, calc(100vw - 24px));
+  z-index: 20;
+  background: var(--reader-bg);
+  color: var(--reader-fg);
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.bookmark-drawer-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.25);
+}
+.bookmark-drawer-header h3 {
+  margin: 0;
+  font-size: 0.95em;
+  flex: 1 1 auto;
+}
+.bookmark-drawer-error {
+  margin: 8px 12px;
+  padding: 6px 10px;
+  font-size: 0.85em;
+  background: rgba(220, 60, 60, 0.12);
+  border: 1px solid rgba(220, 60, 60, 0.35);
+  border-radius: 6px;
+}
+.bookmark-drawer-empty {
+  margin: 16px 12px;
+}
+.bookmark-list {
+  list-style: none;
+  padding: 8px 8px;
+  margin: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 auto;
+}
+.bookmark-row {
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(127, 127, 127, 0.04);
+}
+.bookmark-row-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.bookmark-jump {
+  flex: 1 1 auto;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.bookmark-jump:hover { color: #74a3ff; }
+.bookmark-chapter {
+  font-weight: 500;
+  font-size: 0.95em;
+}
+.bookmark-progress {
+  font-size: 0.78em;
+}
+.bookmark-delete {
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  background: transparent;
+  color: inherit;
+  border-radius: 4px;
+  padding: 0 8px;
+  font-size: 0.85em;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.bookmark-delete:hover {
+  color: #b03030;
+  border-color: rgba(176, 48, 48, 0.5);
+}
+.bookmark-note {
+  width: 100%;
+  min-height: 48px;
+  resize: vertical;
+  font: inherit;
+  font-size: 0.88em;
+  padding: 6px 8px;
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  background: var(--reader-bg);
+  color: var(--reader-fg);
+  border-radius: 6px;
+}
+.bookmark-note:focus {
+  outline: 2px solid #74a3ff;
+  outline-offset: -1px;
+}
+.bookmark-saving {
+  font-size: 0.78em;
+  align-self: flex-end;
+}
 foliate-view {
   display: block;
   position: absolute;

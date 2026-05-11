@@ -81,8 +81,10 @@ impl Db {
 const MIGRATIONS: &[&str] = &[
     // v1 — Phase 3: library
     include_str!("migrations/001_initial.sql"),
-    // v2 — Phase 4: vocab + encounter + source (added later)
-    // include_str!("migrations/002_vocab.sql"),
+    // v2 — Phase 3: bookmarks
+    include_str!("migrations/002_bookmarks.sql"),
+    // v3 — Phase 4: vocab + encounter + source (added later)
+    // include_str!("migrations/003_vocab.sql"),
 ];
 
 #[cfg(test)]

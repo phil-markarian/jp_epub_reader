@@ -365,6 +365,9 @@ window.__JP_READER = {
                 if (savedLocation != null) {
                     saveReaderState(workId, { lastLocation: savedLocation });
                 }
+                // Track latest detail so bookmark UI can snapshot it
+                // without reaching into renderer internals.
+                window.__JP_READER._lastRelocateDetail = e.detail;
                 if (typeof onRelocate === "function") onRelocate(e.detail);
             });
             attachWheel(container);
@@ -467,6 +470,34 @@ window.__JP_READER = {
      */
     wheelScroll(deltaX, deltaY) {
         feedScrolledWheel(wheelDeltaForScrolledMode(deltaX, deltaY));
+    },
+
+    /**
+     * Snapshot of the current reading location for the bookmark layer.
+     * Returns `null` if nothing has relocated yet.
+     */
+    getCurrentLocation() {
+        const detail = window.__JP_READER._lastRelocateDetail;
+        if (!detail) return null;
+        return {
+            cfi: typeof detail.cfi === "string" ? detail.cfi : null,
+            sectionIndex: typeof detail.index === "number" ? detail.index : null,
+            fraction: typeof detail.fraction === "number" ? detail.fraction : null,
+            chapter: detail.tocItem?.label ?? null,
+        };
+    },
+
+    /** Navigate the reader to a stored bookmark target. */
+    goToBookmark(target) {
+        const view = window.__JP_READER._lastView;
+        if (!view) return;
+        if (typeof target === "string" && target.length > 0) {
+            view.goTo?.(target);
+            return;
+        }
+        if (target && typeof target.fraction === "number") {
+            view.goToFraction?.(target.fraction);
+        }
     },
 
     /** Toggle paginated / scrolled flow. Returns the new flow. */

@@ -44,6 +44,79 @@ extern "C" {
 
     #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "setLineHeight")]
     fn jp_set_line_height(lh: f64);
+
+    #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "getCurrentLocation")]
+    fn jp_get_current_location() -> JsValue;
+
+    #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "goToBookmark")]
+    fn jp_go_to_bookmark(target: JsValue);
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct CurrentLocation {
+    cfi: Option<String>,
+    #[serde(rename = "sectionIndex")]
+    section_index: Option<u32>,
+    fraction: Option<f64>,
+    chapter: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Bookmark {
+    id: i64,
+    work_id: u32,
+    cfi: Option<String>,
+    section_index: Option<u32>,
+    fraction: Option<f64>,
+    chapter: Option<String>,
+    note: String,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AddBookmarkArgs {
+    work_id: u32,
+    cfi: Option<String>,
+    section_index: Option<u32>,
+    fraction: Option<f64>,
+    chapter: Option<String>,
+    note: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ListBookmarksArgs {
+    #[serde(rename = "workId")]
+    work_id: u32,
+}
+
+#[derive(Serialize)]
+struct UpdateBookmarkNoteArgs<'a> {
+    id: i64,
+    note: &'a str,
+}
+
+#[derive(Serialize)]
+struct DeleteBookmarkArgs {
+    id: i64,
+}
+
+async fn invoke_typed<T: serde::Serialize, R: serde::de::DeserializeOwned>(
+    cmd: &str,
+    args: &T,
+) -> Result<R, String> {
+    let v = serde_wasm_bindgen::to_value(args).unwrap();
+    match invoke(cmd, v).await {
+        Ok(out) => serde_wasm_bindgen::from_value::<R>(out)
+            .map_err(|e| format!("decode {cmd}: {e}")),
+        Err(e) => Err(stringify(&e)),
+    }
+}
+
+async fn invoke_unit<T: serde::Serialize>(cmd: &str, args: &T) -> Result<(), String> {
+    let v = serde_wasm_bindgen::to_value(args).unwrap();
+    invoke(cmd, v).await.map(|_| ()).map_err(|e| stringify(&e))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -252,6 +325,56 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
 
     let on_toggle_settings = move |_| set_settings_open.update(|v| *v = !*v);
 
+    // Bookmarks
+    let (bookmarks_open, set_bookmarks_open) = signal::<bool>(false);
+    let (bookmarks, set_bookmarks) = signal::<Vec<Bookmark>>(Vec::new());
+    let (bookmark_error, set_bookmark_error) = signal::<Option<String>>(None);
+
+    let refresh_bookmarks = move || {
+        spawn_local(async move {
+            match invoke_typed::<_, Vec<Bookmark>>(
+                "list_bookmarks",
+                &ListBookmarksArgs { work_id },
+            )
+            .await
+            {
+                Ok(rows) => set_bookmarks.set(rows),
+                Err(e) => set_bookmark_error.set(Some(format!("list: {e}"))),
+            }
+        });
+    };
+
+    let on_toggle_bookmarks = move |_| {
+        let next = !bookmarks_open.get_untracked();
+        set_bookmarks_open.set(next);
+        if next {
+            refresh_bookmarks();
+        }
+    };
+
+    let on_add_bookmark = move |_| {
+        let raw = jp_get_current_location();
+        let loc: CurrentLocation = serde_wasm_bindgen::from_value(raw).unwrap_or_default();
+        set_bookmark_error.set(None);
+        spawn_local(async move {
+            let args = AddBookmarkArgs {
+                work_id,
+                cfi: loc.cfi,
+                section_index: loc.section_index,
+                fraction: loc.fraction,
+                chapter: loc.chapter,
+                note: None,
+            };
+            match invoke_typed::<_, Bookmark>("add_bookmark", &args).await {
+                Ok(_) => {
+                    set_bookmarks_open.set(true);
+                    refresh_bookmarks();
+                }
+                Err(e) => set_bookmark_error.set(Some(format!("add: {e}"))),
+            }
+        });
+    };
+
     // Keybind state (loaded from localStorage; falls back to defaults).
     let (keybinds, set_keybinds) = signal::<Keybinds>(load_keybinds());
     // When `Some(action)`, the next keypress is recorded for that action.
@@ -393,6 +516,12 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                         _ => "☀",
                     }}
                 </button>
+                <button type="button" class="reader-control" on:click=on_add_bookmark title="Bookmark this page">
+                    "＋🔖"
+                </button>
+                <button type="button" class="reader-control" on:click=on_toggle_bookmarks title="Show bookmarks">
+                    "🔖"
+                </button>
                 <button type="button" class="reader-control" on:click=on_toggle_settings title="Settings">
                     "⚙"
                 </button>
@@ -453,6 +582,17 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                     >"›"</button>
                 })}
             </div>
+
+            {move || bookmarks_open.get().then(|| view! {
+                <BookmarkDrawer
+                    bookmarks=bookmarks
+                    error=bookmark_error
+                    set_error=set_bookmark_error
+                    refresh=refresh_bookmarks
+                    on_close=move |_| set_bookmarks_open.set(false)
+                    on_add=on_add_bookmark
+                />
+            })}
         </main>
     }
 }
@@ -544,6 +684,152 @@ fn KeybindEditor(
                 }).collect_view()}
             </div>
         </div>
+    }
+}
+
+#[component]
+fn BookmarkDrawer(
+    bookmarks: ReadSignal<Vec<Bookmark>>,
+    error: ReadSignal<Option<String>>,
+    set_error: WriteSignal<Option<String>>,
+    refresh: impl Fn() + Copy + 'static + Send + Sync,
+    on_close: impl Fn(leptos::ev::MouseEvent) + 'static,
+    on_add: impl Fn(leptos::ev::MouseEvent) + Copy + 'static,
+) -> impl IntoView {
+    view! {
+        <aside class="bookmark-drawer">
+            <header class="bookmark-drawer-header">
+                <h3>"Bookmarks"</h3>
+                <button type="button" class="reader-control" on:click=on_add title="Bookmark current page">
+                    "＋"
+                </button>
+                <button type="button" class="reader-control" on:click=on_close title="Close">
+                    "×"
+                </button>
+            </header>
+            {move || error.get().map(|msg| view! {
+                <div class="bookmark-drawer-error">{msg}</div>
+            })}
+            {move || {
+                let rows = bookmarks.get();
+                if rows.is_empty() {
+                    view! {
+                        <p class="muted bookmark-drawer-empty">
+                            "No bookmarks yet. Click "<strong>"＋🔖"</strong>" in the toolbar to bookmark the current page."
+                        </p>
+                    }.into_any()
+                } else {
+                    view! {
+                        <ul class="bookmark-list">
+                            {rows.into_iter().map(|b| view! {
+                                <li>
+                                    <BookmarkRow
+                                        bookmark=b
+                                        refresh=refresh
+                                        set_error=set_error
+                                    />
+                                </li>
+                            }).collect_view()}
+                        </ul>
+                    }.into_any()
+                }
+            }}
+        </aside>
+    }
+}
+
+#[component]
+fn BookmarkRow(
+    bookmark: Bookmark,
+    refresh: impl Fn() + Copy + 'static + Send + Sync,
+    set_error: WriteSignal<Option<String>>,
+) -> impl IntoView {
+    let id = bookmark.id;
+    let chapter = bookmark.chapter.clone().unwrap_or_default();
+    let chapter_for_display = if chapter.is_empty() {
+        bookmark
+            .section_index
+            .map(|i| format!("Section {i}"))
+            .unwrap_or_else(|| "Unknown chapter".into())
+    } else {
+        chapter
+    };
+    let fraction = bookmark.fraction.unwrap_or(0.0);
+    let progress_label = format!("{:.0}%", (fraction * 100.0).clamp(0.0, 100.0));
+    let cfi = bookmark.cfi.clone();
+    let initial_note = bookmark.note.clone();
+
+    let (note, set_note) = signal::<String>(initial_note);
+    let (saving, set_saving) = signal::<bool>(false);
+    let (confirm_delete, set_confirm_delete) = signal::<bool>(false);
+
+    let on_go = move |_| {
+        if let Some(cfi) = cfi.clone() {
+            jp_go_to_bookmark(JsValue::from_str(&cfi));
+        }
+    };
+
+    let on_note_input = move |ev: leptos::ev::Event| {
+        let v = event_target_value(&ev);
+        set_note.set(v);
+    };
+
+    let on_note_blur = move |_| {
+        let value = note.get_untracked();
+        set_saving.set(true);
+        spawn_local(async move {
+            match invoke_unit(
+                "update_bookmark_note",
+                &UpdateBookmarkNoteArgs { id, note: &value },
+            )
+            .await
+            {
+                Ok(_) => {}
+                Err(e) => set_error.set(Some(format!("save note: {e}"))),
+            }
+            set_saving.set(false);
+        });
+    };
+
+    let on_delete = move |_| {
+        if !confirm_delete.get_untracked() {
+            set_confirm_delete.set(true);
+            return;
+        }
+        set_confirm_delete.set(false);
+        spawn_local(async move {
+            match invoke_unit("delete_bookmark", &DeleteBookmarkArgs { id }).await {
+                Ok(_) => refresh(),
+                Err(e) => set_error.set(Some(format!("delete: {e}"))),
+            }
+        });
+    };
+
+    view! {
+        <article class="bookmark-row">
+            <div class="bookmark-row-head">
+                <button type="button" class="bookmark-jump" on:click=on_go title="Jump to bookmark">
+                    <span class="bookmark-chapter">{chapter_for_display}</span>
+                    <span class="muted bookmark-progress">{progress_label}</span>
+                </button>
+                <button
+                    type="button"
+                    class="bookmark-delete"
+                    on:click=on_delete
+                    title=move || if confirm_delete.get() { "Click again to confirm" } else { "Remove bookmark" }.to_string()
+                >
+                    {move || if confirm_delete.get() { "Confirm?" } else { "×" }}
+                </button>
+            </div>
+            <textarea
+                class="bookmark-note"
+                placeholder="Add a note…"
+                prop:value=move || note.get()
+                on:input=on_note_input
+                on:blur=on_note_blur
+            ></textarea>
+            {move || saving.get().then(|| view! { <span class="muted bookmark-saving">"saving…"</span> })}
+        </article>
     }
 }
 
