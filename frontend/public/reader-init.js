@@ -31,26 +31,131 @@ const saveReaderState = (workId, patch) => {
     }
 };
 
-/**
- * Best-effort chapter label resolution for a bookmark.
+/* ──────────────────────────────────────────────────────────────────────
+ * Chapter resolution
  *
- * Foliate's TOCProgress sometimes returns null for sections that
- * don't have their own TOC entry (eg. AozoraEpub3 puts the title /
- * author block in section 0 with no TOC anchor, and the first real
- * TOC entry sits a few sections in). When tocItem is null we walk
- * book.toc ourselves and pick the latest item whose href resolves
- * to a section index at or before the current one.
- */
-const inferChapterLabel = (view, detail) => {
-    const fromDetail = detail?.tocItem?.label;
-    if (typeof fromDetail === "string" && fromDetail.trim().length > 0) {
-        return fromDetail.trim();
+ * AozoraEpub3-converted EPUBs only put a fraction of their headings
+ * into `toc.ncx` (Kokoro: just 中 + 下; 夢十夜 / 銀河鉄道の夜: an
+ * empty navMap). But the converter *always* wraps every Aozora
+ * 見出し chuki in inline markup:
+ *
+ *   ［＃大見出し］→ <div class="chap1">…</div>
+ *   ［＃中見出し］→ <div class="chap2">…</div>
+ *   ［＃小見出し］→ <div class="chap3">…</div>
+ *
+ * So we build a per-section cache of those inline markers at mount,
+ * pre-walking every section via `book.sections[i].createDocument()`
+ * so we have data even for sections the user never actually paginates
+ * into. The resolver below first checks Foliate's tocItem (cheapest /
+ * most precise when the EPUB has a real TOC), then falls back to the
+ * inline cache, then to a book.toc walk by resolved section index.
+ * Final composed label is "chap1 · chap2 · chap3" with empty levels
+ * dropped.
+ * ────────────────────────────────────────────────────────────────── */
+
+const CHAPTER_CLASS_RE = /\bchap(\d+)\b/;
+
+const extractChaptersFromDoc = (doc) => {
+    if (!doc?.querySelectorAll) return [];
+    const out = [];
+    const nodes = doc.querySelectorAll('[class*="chap"]');
+    for (const el of nodes) {
+        const m = (el.className || "").match(CHAPTER_CLASS_RE);
+        if (!m) continue;
+        const level = parseInt(m[1], 10);
+        if (!Number.isFinite(level)) continue;
+        const label = (el.textContent || "").replace(/\s+/g, " ").trim();
+        if (!label) continue;
+        out.push({ level, label, id: el.id || null });
     }
+    return out;
+};
+
+const setSectionChapters = (sectionIndex, list) => {
+    if (typeof sectionIndex !== "number" || !window.__JP_READER) return;
+    const map = window.__JP_READER._chaptersBySection;
+    if (!(map instanceof Map)) return;
+    map.set(sectionIndex, list);
+};
+
+/**
+ * Pick the latest chapter in `list` whose DOM position is at or
+ * before `range.startContainer`. Returns null when the range is
+ * missing/incompatible (different document, etc.).
+ */
+const findChaptersAtOrBefore = (list, doc, range) => {
+    if (!Array.isArray(list) || list.length === 0) return null;
+    if (!range || !doc || !range.startContainer) return null;
+    if (range.startContainer.ownerDocument !== doc
+        && range.startContainer.getRootNode?.() !== doc) {
+        return null;
+    }
+    let chap1 = null;
+    let chap2 = null;
+    let chap3 = null;
+    let lastLevel = 0;
+    for (const ch of list) {
+        const el = ch.id ? doc.getElementById(ch.id) : null;
+        if (!el) continue;
+        let before;
+        try {
+            const cmp = el.compareDocumentPosition(range.startContainer);
+            before = (cmp & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+                || cmp === 0; // same node counts as "at"
+        } catch {
+            continue;
+        }
+        if (!before) break;
+        // chapter is at or before visible position
+        if (ch.level === 1) { chap1 = ch; chap2 = null; chap3 = null; }
+        else if (ch.level === 2) { chap2 = ch; chap3 = null; }
+        else if (ch.level === 3) { chap3 = ch; }
+        lastLevel = ch.level;
+    }
+    // If no chap1 was seen but a lower-level heading exists (e.g.
+    // 夢十夜 is all chap2), use those.
+    return { chap1, chap2, chap3, lastLevel };
+};
+
+/**
+ * Coarser resolution by section index alone — used as a fallback
+ * when we don't have a DOM range or the range comparison failed,
+ * and by the live-resolve-at-display path for old bookmarks.
+ */
+const sectionChapterDefaults = (sectionIndex) => {
+    const map = window.__JP_READER?._chaptersBySection;
+    if (!(map instanceof Map)) return null;
+    if (typeof sectionIndex !== "number") return null;
+
+    // First, see if this section has its own chap1. Walk backward
+    // through sections if not; the first chap1 we find is the
+    // currently-active book part.
+    let chap1 = null;
+    for (let i = sectionIndex; i >= 0 && chap1 == null; i--) {
+        const list = map.get(i) || [];
+        const found = list.find(c => c.level === 1);
+        if (found) chap1 = found;
+    }
+    // chap2 is the first chap2 of the section (we're at the start of
+    // the section by this lookup).
+    const list = map.get(sectionIndex) || [];
+    const chap2 = list.find(c => c.level === 2) || null;
+    const chap3 = list.find(c => c.level === 3) || null;
+    return { chap1, chap2, chap3, lastLevel: chap3?.level ?? chap2?.level ?? chap1?.level ?? 0 };
+};
+
+const composeChapterLabel = (parts) => {
+    if (!parts) return null;
+    const pieces = [parts.chap1, parts.chap2, parts.chap3]
+        .filter(p => p && typeof p.label === "string" && p.label.length > 0)
+        .map(p => p.label);
+    return pieces.length ? pieces.join(" · ") : null;
+};
+
+const tocWalkLabel = (view, currentIndex) => {
     const book = view?.book;
     if (!book?.toc || typeof book.resolveHref !== "function") return null;
-    const currentIndex = detail?.section?.current;
     if (typeof currentIndex !== "number") return null;
-
     let bestLabel = null;
     let bestIndex = -1;
     const visit = (items) => {
@@ -78,6 +183,54 @@ const inferChapterLabel = (view, detail) => {
     };
     visit(book.toc);
     return bestLabel;
+};
+
+/**
+ * Best-effort chapter label for the user's current location.
+ *
+ *   1. `detail.tocItem.label` if present (Foliate's own resolver).
+ *   2. Inline-markup cache for the current section, indexed against
+ *      `detail.range`. If the range is missing or in a different
+ *      document, fall back to section-defaults.
+ *   3. `book.toc` href-resolution walk by section index.
+ */
+const inferChapterLabel = (view, detail) => {
+    const fromDetail = detail?.tocItem?.label;
+    if (typeof fromDetail === "string" && fromDetail.trim().length > 0) {
+        return fromDetail.trim();
+    }
+    const currentIndex = detail?.section?.current;
+    const map = window.__JP_READER?._chaptersBySection;
+    if (map instanceof Map && typeof currentIndex === "number") {
+        const list = map.get(currentIndex) || [];
+        const range = detail?.range;
+        const doc = range?.startContainer?.ownerDocument ?? null;
+        let parts = list.length ? findChaptersAtOrBefore(list, doc, range) : null;
+        // If we couldn't compare against the range (no range, or
+        // section content not currently in this doc), or the current
+        // section had no chap1 in the at-or-before window, fall back
+        // to defaults that walk earlier sections for chap1.
+        if (!parts || parts.chap1 == null) {
+            const defaults = sectionChapterDefaults(currentIndex);
+            if (defaults) {
+                // Merge: keep finer chap2/chap3 from range walk if
+                // present, but inherit chap1 from defaults.
+                if (parts) {
+                    parts = {
+                        chap1: parts.chap1 ?? defaults.chap1,
+                        chap2: parts.chap2 ?? defaults.chap2,
+                        chap3: parts.chap3 ?? defaults.chap3,
+                        lastLevel: parts.lastLevel || defaults.lastLevel,
+                    };
+                } else {
+                    parts = defaults;
+                }
+            }
+        }
+        const composed = composeChapterLabel(parts);
+        if (composed) return composed;
+    }
+    return tocWalkLabel(view, currentIndex);
 };
 
 const savedLocationFromRelocate = (detail) => {
@@ -382,6 +535,10 @@ window.__JP_READER = {
             // Reset container so re-entries don't stack views.
             container.replaceChildren();
             window.__JP_READER._workId = workId;
+            // Fresh chapter cache per mount — different works can have
+            // identical section_index values, so we never want to carry
+            // an old book's cache over.
+            window.__JP_READER._chaptersBySection = new Map();
             const saved = loadReaderState(workId);
             window.__JP_READER._flow = saved.flow === "scrolled" ? "scrolled" : "paginated";
             window.__JP_READER._theme =
@@ -397,6 +554,7 @@ window.__JP_READER = {
             // dedupes via __jpWheelAttached.
             view.addEventListener("load", (e) => {
                 const doc = e.detail?.doc;
+                const index = e.detail?.index;
                 if (doc) {
                     captureLayoutFromDoc(doc);
                     attachWheel(doc);
@@ -404,6 +562,13 @@ window.__JP_READER = {
                     if (doc.defaultView) {
                         attachWheel(doc.defaultView);
                         attachKeyNav(doc.defaultView);
+                    }
+                    if (typeof index === "number") {
+                        // Always replace — the live-rendered doc is the
+                        // most authoritative source for this section's
+                        // chapter markers (font shaping etc. is irrelevant
+                        // since we read textContent).
+                        setSectionChapters(index, extractChaptersFromDoc(doc));
                     }
                 }
                 if (typeof onLoad === "function") onLoad(e.detail);
@@ -440,6 +605,32 @@ window.__JP_READER = {
             console.log("[reader-init] opening EPUB", file);
             await view.open(file);
             console.log("[reader-init] view.open resolved", view);
+
+            // Pre-walk every section to seed the chapter cache before
+            // the user can interact. Foliate's `load` event only fires
+            // for the section it paginates into; without this, the
+            // cache stays empty for any chapter the user hasn't
+            // visited yet. createDocument() returns a parsed Document
+            // we can query immediately and then drop.
+            try {
+                const sections = view.book?.sections ?? [];
+                await Promise.all(sections.map(async (section, idx) => {
+                    if (!section || section.linear === "no") return;
+                    if (typeof section.createDocument !== "function") return;
+                    if (window.__JP_READER._chaptersBySection.has(idx)) return;
+                    try {
+                        const doc = await section.createDocument();
+                        if (doc) {
+                            setSectionChapters(idx, extractChaptersFromDoc(doc));
+                        }
+                    } catch (e) {
+                        // Skip unreadable sections rather than aborting
+                        // the whole pre-walk.
+                    }
+                }));
+            } catch (e) {
+                console.warn("[reader-init] chapter pre-walk failed", e);
+            }
 
             // Default to a comfortable column width for vertical Japanese reading.
             const renderer = view.renderer;
@@ -481,6 +672,16 @@ window.__JP_READER = {
     prev(view) { (view ?? window.__JP_READER._lastView)?.prev?.(); },
     goTo(view, target) { (view ?? window.__JP_READER._lastView)?.goTo?.(target); },
     handleReaderAction(action, key) { return performReaderAction(action, key); },
+
+    /**
+     * Section-only chapter lookup. Used by the BookmarkRow render so
+     * pre-existing bookmarks (where `chapter` was stored empty)
+     * pick up the new inline-markup labels at display time.
+     * Returns a string label or null.
+     */
+    resolveChapterForSection(sectionIndex) {
+        return composeChapterLabel(sectionChapterDefaults(sectionIndex));
+    },
 
     /** Cycle theme: light → dark → sepia → light. */
     cycleTheme() {

@@ -50,6 +50,9 @@ extern "C" {
 
     #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "goToBookmark")]
     fn jp_go_to_bookmark(target: JsValue);
+
+    #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "resolveChapterForSection")]
+    fn jp_resolve_chapter_for_section(section_index: u32) -> JsValue;
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -781,14 +784,19 @@ fn BookmarkRow(
     set_error: WriteSignal<Option<String>>,
 ) -> impl IntoView {
     let id = bookmark.id;
-    let chapter = bookmark.chapter.clone().unwrap_or_default();
-    let chapter_for_display = if chapter.is_empty() {
-        bookmark
-            .section_index
-            .map(|i| format!("Section {i}"))
-            .unwrap_or_else(|| "Unknown chapter".into())
+    let stored_chapter = bookmark.chapter.clone().unwrap_or_default();
+    // Live-resolve from the chapter cache when the stored label is
+    // empty (older bookmarks captured before the inline-markup
+    // resolver landed). The stored value still wins when present.
+    let chapter_for_display = if !stored_chapter.is_empty() {
+        stored_chapter
+    } else if let Some(idx) = bookmark.section_index {
+        match jp_resolve_chapter_for_section(idx).as_string() {
+            Some(s) if !s.is_empty() => s,
+            _ => format!("Section {idx}"),
+        }
     } else {
-        chapter
+        "Unknown chapter".into()
     };
     let fraction = bookmark.fraction.unwrap_or(0.0);
     let progress_label = format!("{:.0}%", (fraction * 100.0).clamp(0.0, 100.0));
