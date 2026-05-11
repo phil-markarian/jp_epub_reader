@@ -388,6 +388,12 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
             if ev.meta_key() || ev.ctrl_key() || ev.alt_key() {
                 return;
             }
+            // Let editable fields swallow keys themselves so the user
+            // can type their bookmark note (j/k/space/arrows etc. would
+            // otherwise be intercepted as nav shortcuts).
+            if is_editable_target(ev.target().as_ref()) {
+                return;
+            }
             let key = ev.key();
 
             // Let the JS reader layer own raw arrow-key behavior first so
@@ -840,6 +846,21 @@ fn make_blob(bytes: &JsValue) -> Result<web_sys::Blob, String> {
     opts.set_type("application/epub+zip");
     web_sys::Blob::new_with_buffer_source_sequence_and_options(&arr, &opts)
         .map_err(|e| format!("Blob::new failed: {}", stringify(&e)))
+}
+
+fn is_editable_target(target: Option<&web_sys::EventTarget>) -> bool {
+    use wasm_bindgen::JsCast;
+    let Some(target) = target else { return false };
+    if let Some(el) = target.dyn_ref::<web_sys::HtmlElement>() {
+        if el.is_content_editable() {
+            return true;
+        }
+        let tag = el.tag_name().to_ascii_uppercase();
+        if tag == "TEXTAREA" || tag == "INPUT" {
+            return true;
+        }
+    }
+    false
 }
 
 fn stringify(v: &JsValue) -> String {
