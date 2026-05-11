@@ -115,10 +115,35 @@ const onWheelInner = (ev) => {
     else view.prev?.();
 };
 
-const attachWheel = (target) => {
+// Some iframes are created before the load event we hook into; sweep
+// for them once after mount so we don't miss the very first section.
+const attachAllIframes = (root) => {
+    if (!root) return;
+    const visit = (node) => {
+        if (!node) return;
+        if (node.tagName === "IFRAME") {
+            try {
+                const doc = node.contentDocument;
+                if (doc) attachWheel(doc, `iframe-doc(${node.src?.slice(0, 60)})`);
+                if (node.contentWindow) attachWheel(node.contentWindow, "iframe-window");
+            } catch (e) {
+                console.warn("[reader-init] cant access iframe", e);
+            }
+        }
+        if (node.shadowRoot) {
+            node.shadowRoot.querySelectorAll("*").forEach(visit);
+            node.shadowRoot.childNodes.forEach(visit);
+        }
+        node.childNodes?.forEach?.(visit);
+    };
+    visit(root);
+};
+
+const attachWheel = (target, label) => {
     if (!target || target.__jpWheelAttached) return;
     target.__jpWheelAttached = true;
     target.addEventListener("wheel", onWheelInner, { passive: false });
+    console.log("[reader-init] attached wheel listener to", label || target);
 };
 
 window.__JP_READER = {
@@ -140,7 +165,16 @@ window.__JP_READER = {
             // Wire wheel forwarding into each section iframe as it loads.
             view.addEventListener("load", (e) => {
                 const doc = e.detail?.doc;
-                if (doc) attachWheel(doc);
+                console.log("[reader-init] section load fired", { hasDoc: !!doc, index: e.detail?.index });
+                if (doc) {
+                    attachWheel(doc, `section-${e.detail?.index ?? "?"}-doc`);
+                    if (doc.defaultView) {
+                        attachWheel(doc.defaultView, `section-${e.detail?.index ?? "?"}-window`);
+                    }
+                    if (doc.documentElement) {
+                        attachWheel(doc.documentElement, `section-${e.detail?.index ?? "?"}-html`);
+                    }
+                }
                 if (typeof onLoad === "function") onLoad(e.detail);
             });
 
@@ -148,7 +182,9 @@ window.__JP_READER = {
                 view.addEventListener("relocate", (e) => onRelocate(e.detail));
             }
             // Outer container too, for wheel events that land on the chrome.
-            attachWheel(container);
+            attachWheel(container, "stage-container");
+            // Walk the foliate shadow trees for any already-loaded iframes.
+            setTimeout(() => attachAllIframes(view), 200);
 
             const file = blob instanceof File
                 ? blob
