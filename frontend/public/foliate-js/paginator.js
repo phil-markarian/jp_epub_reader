@@ -449,6 +449,14 @@ export class Paginator extends HTMLElement {
     #touchState
     #touchScrolled
     #lastVisibleRange
+    // Smooth wheel state for scrolled flow. The app layer feeds raw
+    // wheel deltas; the queue drains via rAF directly against
+    // #container so we don't fire a relocate per frame.
+    #wheelQueue = 0
+    #wheelAnim = false
+    #wheelGen = 0
+    #wheelBoundaryTriggered = false
+    #wheelTransitionCooldownUntil = 0
     constructor() {
         super()
         this.#root.innerHTML = `<style>
@@ -1096,6 +1104,119 @@ export class Paginator extends HTMLElement {
             doc: this.#view.document,
         }]
         return []
+    }
+    // Logical scroll offset (0 .. viewSize). Writes the renderer-private
+    // #container.scrollLeft/Top with the same sign convention as
+    // #scrollTo (vertical-rl uses negative scrollLeft). Used by the
+    // wheel pump so we can move smoothly without firing a relocate
+    // per frame — the native scroll listener debounces relocate.
+    #setLogicalScroll(offset) {
+        const element = this.#container
+        const prop = this.scrollProp
+        if (this.scrolled && this.#vertical) element[prop] = -offset
+        else element[prop] = offset
+    }
+    /**
+     * App-layer wheel ingress for scrolled flow. Accumulates `delta`
+     * (positive = advance, negative = retreat) into an internal queue
+     * and drains it via rAF against the renderer's own scroll
+     * container, with one-section-at-a-time boundary crossing and a
+     * post-transition cooldown so trackpad inertia can't run through
+     * multiple chapters per gesture.
+     *
+     * Has no effect outside scrolled flow and outside a loaded view.
+     */
+    feedWheel(delta) {
+        if (!this.scrolled || !this.#view) return
+        if (!Number.isFinite(delta) || delta === 0) return
+
+        // Suppress trailing trackpad inertia for a beat after a section
+        // transition so we don't immediately cross another section.
+        const now = Date.now()
+        if (now < this.#wheelTransitionCooldownUntil) return
+
+        // Direction reversal cancels prior momentum immediately.
+        const newDir = Math.sign(delta)
+        const oldDir = Math.sign(this.#wheelQueue)
+        if (oldDir && newDir !== oldDir) {
+            this.#wheelQueue = 0
+            this.#wheelGen += 1
+            this.#wheelAnim = false
+            this.#wheelBoundaryTriggered = false
+        }
+
+        this.#wheelQueue += delta
+        // Cap to two viewports of buffered scroll so a single big
+        // gesture can't build up runaway backlog.
+        const size = this.size || 0
+        const cap = (size > 0 ? size : 800) * 2
+        if (Math.abs(this.#wheelQueue) > cap) {
+            this.#wheelQueue = Math.sign(this.#wheelQueue) * cap
+        }
+
+        if (this.#wheelAnim) return
+        this.#wheelAnim = true
+        const gen = ++this.#wheelGen
+
+        const SMOOTHING = 0.22
+        const MIN_STEP = 0.5
+
+        const tick = () => {
+            // Stale generation: another feedWheel call canceled us.
+            if (gen !== this.#wheelGen) return
+            // Wait while paginator is locked on a section transition.
+            if (this.#locked) {
+                requestAnimationFrame(tick)
+                return
+            }
+
+            const queue = this.#wheelQueue
+            if (Math.abs(queue) < MIN_STEP) {
+                this.#wheelAnim = false
+                this.#wheelBoundaryTriggered = false
+                return
+            }
+
+            const rawStep = queue * SMOOTHING
+            const dir = Math.sign(rawStep) || Math.sign(queue) || 1
+            const stepMag = Math.max(MIN_STEP, Math.min(Math.abs(rawStep), Math.abs(queue)))
+            const step = dir * stepMag
+
+            const forwardExhausted = dir > 0 && this.viewSize - this.end <= 2
+            const backwardExhausted = dir < 0 && this.start <= 0
+
+            if (forwardExhausted || backwardExhausted) {
+                if (!this.#wheelBoundaryTriggered) {
+                    const adj = this.#adjacentIndex(dir)
+                    if (adj != null) {
+                        this.#wheelBoundaryTriggered = true
+                        this.#wheelQueue = 0
+                        this.#wheelAnim = false
+                        this.#wheelTransitionCooldownUntil = Date.now() + 250
+                        this.#locked = true
+                        Promise.resolve(this.#goTo({
+                            index: adj,
+                            anchor: dir > 0 ? () => 0 : () => 1,
+                        })).finally(() => {
+                            this.#locked = false
+                        })
+                        return
+                    }
+                }
+                // True end of book in this direction — drop the queue.
+                this.#wheelQueue = 0
+                this.#wheelAnim = false
+                this.#wheelBoundaryTriggered = false
+                return
+            }
+
+            const target = Math.max(0, Math.min(this.viewSize, this.start + step))
+            this.#setLogicalScroll(target)
+            this.#wheelQueue -= step
+            requestAnimationFrame(tick)
+        }
+
+        requestAnimationFrame(tick)
     }
     setStyles(styles) {
         this.#styles = styles

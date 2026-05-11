@@ -516,6 +516,15 @@ export class View extends HTMLElement {
     async next(distance) {
         await this.renderer.next(distance)
     }
+    /**
+     * Smooth wheel-style scroll input for scrolled-flow renderers.
+     * Forwards to the renderer's internal wheel queue (currently
+     * implemented by the paginator) so consumers don't have to reach
+     * into the renderer's shadow root to drive horizontal scroll.
+     */
+    feedWheel(delta) {
+        return this.renderer?.feedWheel?.(delta)
+    }
     goLeft() {
         return this.book.dir === 'rtl' ? this.next() : this.prev()
     }
