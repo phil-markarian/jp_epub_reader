@@ -31,6 +31,55 @@ const saveReaderState = (workId, patch) => {
     }
 };
 
+/**
+ * Best-effort chapter label resolution for a bookmark.
+ *
+ * Foliate's TOCProgress sometimes returns null for sections that
+ * don't have their own TOC entry (eg. AozoraEpub3 puts the title /
+ * author block in section 0 with no TOC anchor, and the first real
+ * TOC entry sits a few sections in). When tocItem is null we walk
+ * book.toc ourselves and pick the latest item whose href resolves
+ * to a section index at or before the current one.
+ */
+const inferChapterLabel = (view, detail) => {
+    const fromDetail = detail?.tocItem?.label;
+    if (typeof fromDetail === "string" && fromDetail.trim().length > 0) {
+        return fromDetail.trim();
+    }
+    const book = view?.book;
+    if (!book?.toc || typeof book.resolveHref !== "function") return null;
+    const currentIndex = detail?.section?.current;
+    if (typeof currentIndex !== "number") return null;
+
+    let bestLabel = null;
+    let bestIndex = -1;
+    const visit = (items) => {
+        if (!Array.isArray(items)) return;
+        for (const item of items) {
+            if (typeof item?.href === "string") {
+                try {
+                    const r = book.resolveHref(item.href);
+                    if (
+                        r && typeof r.index === "number"
+                        && r.index <= currentIndex
+                        && r.index > bestIndex
+                        && typeof item.label === "string"
+                        && item.label.trim().length > 0
+                    ) {
+                        bestLabel = item.label.trim();
+                        bestIndex = r.index;
+                    }
+                } catch {
+                    // ignore unresolvable hrefs
+                }
+            }
+            if (item?.subitems?.length) visit(item.subitems);
+        }
+    };
+    visit(book.toc);
+    return bestLabel;
+};
+
 const savedLocationFromRelocate = (detail) => {
     if (typeof detail?.cfi === "string" && detail.cfi.length > 0) {
         return detail.cfi;
@@ -479,11 +528,17 @@ window.__JP_READER = {
     getCurrentLocation() {
         const detail = window.__JP_READER._lastRelocateDetail;
         if (!detail) return null;
+        const view = window.__JP_READER._lastView;
         return {
             cfi: typeof detail.cfi === "string" ? detail.cfi : null,
-            sectionIndex: typeof detail.index === "number" ? detail.index : null,
+            // Foliate's view-level relocate spreads SectionProgress
+            // (which has .section.current), not the raw paginator
+            // `index`. Read from there.
+            sectionIndex: typeof detail?.section?.current === "number"
+                ? detail.section.current
+                : null,
             fraction: typeof detail.fraction === "number" ? detail.fraction : null,
-            chapter: detail.tocItem?.label ?? null,
+            chapter: inferChapterLabel(view, detail),
         };
     },
 
