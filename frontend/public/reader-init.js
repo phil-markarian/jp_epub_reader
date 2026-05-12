@@ -59,50 +59,61 @@ const saveGlobalPrefs = (patch) => {
 /* ──────────────────────────────────────────────────────────────────────
  * Manual drag-region polyfill
  *
- * Tauri 2's runtime is supposed to intercept mousedown on elements with
- * `data-tauri-drag-region` and call startDragging(), but in this build
- * that interception isn't firing for the in-app toolbar that uses
- * TitleBarStyle::Overlay (the toolbar sits in the title-bar row).
- * Wire it up ourselves with the public Tauri JS API.
+ * Tauri 2's auto-interception of `data-tauri-drag-region` isn't firing
+ * in this build, so wire up mousedown → start_window_dragging
+ * (Rust-side command) ourselves. Use the window label from the URL
+ * query string so we don't depend on whichever frontend JS namespace
+ * may or may not be exposed.
  * ────────────────────────────────────────────────────────────────── */
+const currentWindowLabel = () => {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const id = params.get("reader");
+        return id ? `reader-${id}` : "main";
+    } catch {
+        return "main";
+    }
+};
+
+const invokeTauri = async (cmd, args) => {
+    const invoker =
+        window.__TAURI__?.core?.invoke ?? window.__TAURI_INTERNALS__?.invoke;
+    if (typeof invoker !== "function") {
+        throw new Error("tauri invoke not available");
+    }
+    return invoker(cmd, args);
+};
+
 const installDragRegionHandler = () => {
     if (window.__JP_DRAG_REGION_INSTALLED) return;
     window.__JP_DRAG_REGION_INSTALLED = true;
+    const isInteractive = (target) =>
+        !!target.closest(
+            "button, a, input, select, textarea, [contenteditable='true']",
+        );
+
     document.addEventListener("mousedown", (e) => {
         if (e.button !== 0) return;
         const target = e.target instanceof Element ? e.target : null;
         if (!target) return;
-        // Don't hijack interactive controls inside a drag region.
-        if (target.closest("button, a, input, select, textarea, [contenteditable='true']")) {
-            return;
-        }
+        if (isInteractive(target)) return;
         const region = target.closest("[data-tauri-drag-region]");
         if (!region) return;
-        // Use the Tauri 2 window API. Fall back gracefully if not loaded yet.
-        const win = window.__TAURI__?.window?.getCurrentWindow?.()
-            ?? window.__TAURI__?.window?.getCurrentWebviewWindow?.()
-            ?? window.__TAURI__?.webviewWindow?.getCurrentWebviewWindow?.();
-        if (win && typeof win.startDragging === "function") {
-            e.preventDefault();
-            win.startDragging().catch((err) =>
-                console.warn("[reader-init] startDragging failed", err)
-            );
-        }
+        e.preventDefault();
+        const label = currentWindowLabel();
+        invokeTauri("start_window_dragging", { label }).catch((err) =>
+            console.warn("[reader-init] start_window_dragging failed", err),
+        );
     });
+
     document.addEventListener("dblclick", (e) => {
         const target = e.target instanceof Element ? e.target : null;
         if (!target) return;
-        if (target.closest("button, a, input, select, textarea, [contenteditable='true']")) {
-            return;
-        }
+        if (isInteractive(target)) return;
         const region = target.closest("[data-tauri-drag-region]");
         if (!region) return;
-        // macOS double-click on the title bar toggles zoom / maximize.
-        const win = window.__TAURI__?.window?.getCurrentWindow?.()
-            ?? window.__TAURI__?.window?.getCurrentWebviewWindow?.();
-        if (win && typeof win.toggleMaximize === "function") {
-            win.toggleMaximize().catch(() => {});
-        }
+        const label = currentWindowLabel();
+        invokeTauri("toggle_window_maximize", { label }).catch(() => {});
     });
 };
 installDragRegionHandler();

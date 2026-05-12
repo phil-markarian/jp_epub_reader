@@ -207,6 +207,34 @@ pub async fn open_reader_window(
     Ok(())
 }
 
+/// Start dragging the current Tauri window. Invoked from the in-app
+/// title-bar mousedown handler since Tauri 2's auto-detection of
+/// data-tauri-drag-region isn't firing in this build. The JS layer
+/// passes the window label (e.g. "reader-773") so we don't have to
+/// guess which webview window the click came from.
+#[tauri::command]
+pub fn start_window_dragging(label: String, app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let window = app
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("no window with label {label}"))?;
+    window.start_dragging().map_err(|e| e.to_string())
+}
+
+/// Toggle maximize on the named window (double-click on the title bar).
+#[tauri::command]
+pub fn toggle_window_maximize(label: String, app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let window = app
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("no window with label {label}"))?;
+    if window.is_maximized().unwrap_or(false) {
+        window.unmaximize().map_err(|e| e.to_string())
+    } else {
+        window.maximize().map_err(|e| e.to_string())
+    }
+}
+
 /// Returns the LibraryEntry for `work_id`. Reader windows call this on
 /// boot to know what to render.
 #[tauri::command]

@@ -41,6 +41,8 @@ pub fn run() {
             commands::import::open_reader_window,
             commands::import::get_library_entry,
             commands::import::read_epub_bytes,
+            commands::import::start_window_dragging,
+            commands::import::toggle_window_maximize,
             commands::bookmark::add_bookmark,
             commands::bookmark::list_bookmarks,
             commands::bookmark::update_bookmark_note,
