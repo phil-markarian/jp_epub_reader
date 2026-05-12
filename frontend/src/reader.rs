@@ -392,14 +392,26 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
 
     // Wheel handling lives in reader-init.js (it has to attach inside
     // each section iframe; outer listeners don't see those events).
+    // All three sidebar-panel open flags up here so the toggle
+    // handlers below can mutex them.
     let (settings_open, set_settings_open) = signal::<bool>(false);
+    let (bookmarks_open, set_bookmarks_open) = signal::<bool>(false);
+    let (chapters_open, set_chapters_open) = signal::<bool>(false);
+
     let (font_scale, set_font_scale) = signal::<f64>(1.0);
     let (line_height, set_line_height) = signal::<f64>(1.7);
 
-    let on_toggle_settings = move |_| set_settings_open.update(|v| *v = !*v);
+    let on_toggle_settings = move |_| {
+        let next = !settings_open.get_untracked();
+        set_settings_open.set(next);
+        if next {
+            // The three panels share the same sidebar slot.
+            set_bookmarks_open.set(false);
+            set_chapters_open.set(false);
+        }
+    };
 
-    // Bookmarks
-    let (bookmarks_open, set_bookmarks_open) = signal::<bool>(false);
+    // Bookmarks data
     let (bookmarks, set_bookmarks) = signal::<Vec<Bookmark>>(Vec::new());
     let (bookmark_error, set_bookmark_error) = signal::<Option<String>>(None);
 
@@ -407,7 +419,6 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
     // book open). Refreshed each time the drawer is opened because
     // sections load lazily during paginated reading and the live
     // cache picks up newer content.
-    let (chapters_open, set_chapters_open) = signal::<bool>(false);
     let (chapters, set_chapters) = signal::<Vec<ChapterEntry>>(Vec::new());
 
     let refresh_chapters = move || {
@@ -432,8 +443,9 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
         set_chapters_open.set(next);
         if next {
             refresh_chapters();
-            // Close the bookmark drawer if it's open — they share screen real estate.
+            // The three panels share the same sidebar slot.
             set_bookmarks_open.set(false);
+            set_settings_open.set(false);
         }
     };
 
@@ -455,9 +467,9 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
         let next = !bookmarks_open.get_untracked();
         set_bookmarks_open.set(next);
         if next {
-            // Drawers share the right-side screen real estate; only one
-            // at a time.
+            // The three panels share the same sidebar slot.
             set_chapters_open.set(false);
+            set_settings_open.set(false);
             refresh_bookmarks();
         }
     };
@@ -478,6 +490,7 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
             match invoke_typed::<_, Bookmark>("add_bookmark", &args).await {
                 Ok(_) => {
                     set_chapters_open.set(false);
+                    set_settings_open.set(false);
                     set_bookmarks_open.set(true);
                     refresh_bookmarks();
                 }
@@ -647,60 +660,101 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                 </button>
             </header>
 
-            {move || settings_open.get().then(|| view! {
-                <div class="reader-settings">
-                    <label>
-                        <span>"Font size"</span>
-                        <input
-                            type="range"
-                            min="0.6"
-                            max="2.0"
-                            step="0.05"
-                            prop:value=move || font_scale.get().to_string()
-                            on:input=on_font_input
-                        />
-                        <span class="muted">{move || format!("{:.0}%", font_scale.get() * 100.0)}</span>
-                    </label>
-                    <label>
-                        <span>"Line spacing"</span>
-                        <input
-                            type="range"
-                            min="1.2"
-                            max="2.4"
-                            step="0.05"
-                            prop:value=move || line_height.get().to_string()
-                            on:input=on_line_input
-                        />
-                        <span class="muted">{move || format!("{:.2}", line_height.get())}</span>
-                    </label>
-
-                    <hr class="reader-settings-divider" />
-                    <KeybindEditor
-                        keybinds=keybinds
-                        set_keybinds=set_keybinds
-                        capturing=capturing
-                        set_capturing=set_capturing
-                    />
+            <div class="reader-body">
+                <div class="reader-stage" node_ref=stage_ref>
+                    {move || (flow.get() == "paginated").then(|| view! {
+                        <button
+                            type="button"
+                            class="edge-arrow edge-prev"
+                            on:click=on_prev
+                            title="Previous page"
+                            aria-label="Previous page"
+                        >"‹"</button>
+                        <button
+                            type="button"
+                            class="edge-arrow edge-next"
+                            on:click=on_next
+                            title="Next page"
+                            aria-label="Next page"
+                        >"›"</button>
+                    })}
                 </div>
-            })}
 
-            <div class="reader-stage" node_ref=stage_ref>
-                {move || (flow.get() == "paginated").then(|| view! {
-                    <button
-                        type="button"
-                        class="edge-arrow edge-prev"
-                        on:click=on_prev
-                        title="Previous page"
-                        aria-label="Previous page"
-                    >"‹"</button>
-                    <button
-                        type="button"
-                        class="edge-arrow edge-next"
-                        on:click=on_next
-                        title="Next page"
-                        aria-label="Next page"
-                    >"›"</button>
-                })}
+                {move || {
+                    let any_open = settings_open.get()
+                        || bookmarks_open.get()
+                        || chapters_open.get();
+                    if !any_open {
+                        return view! { <span></span> }.into_any();
+                    }
+                    view! {
+                        <aside class="reader-sidebar">
+                            {move || settings_open.get().then(|| view! {
+                                <div class="reader-settings">
+                                    <header class="reader-sidebar-header">
+                                        <h3>"Settings"</h3>
+                                        <button type="button" class="reader-control"
+                                            on:click=move |_| set_settings_open.set(false)
+                                            title="Close">"×"</button>
+                                    </header>
+                                    <div class="reader-sidebar-body">
+                                        <label>
+                                            <span>"Font size"</span>
+                                            <input
+                                                type="range"
+                                                min="0.6"
+                                                max="2.0"
+                                                step="0.05"
+                                                prop:value=move || font_scale.get().to_string()
+                                                on:input=on_font_input
+                                            />
+                                            <span class="muted">{move || format!("{:.0}%", font_scale.get() * 100.0)}</span>
+                                        </label>
+                                        <label>
+                                            <span>"Line spacing"</span>
+                                            <input
+                                                type="range"
+                                                min="1.2"
+                                                max="2.4"
+                                                step="0.05"
+                                                prop:value=move || line_height.get().to_string()
+                                                on:input=on_line_input
+                                            />
+                                            <span class="muted">{move || format!("{:.2}", line_height.get())}</span>
+                                        </label>
+
+                                        <hr class="reader-settings-divider" />
+                                        <KeybindEditor
+                                            keybinds=keybinds
+                                            set_keybinds=set_keybinds
+                                            capturing=capturing
+                                            set_capturing=set_capturing
+                                        />
+                                    </div>
+                                </div>
+                            })}
+
+                            {move || bookmarks_open.get().then(|| view! {
+                                <BookmarkDrawer
+                                    bookmarks=bookmarks
+                                    error=bookmark_error
+                                    set_error=set_bookmark_error
+                                    refresh=refresh_bookmarks
+                                    on_close=move |_| set_bookmarks_open.set(false)
+                                    on_add=on_add_bookmark
+                                />
+                            })}
+
+                            {move || chapters_open.get().then(|| view! {
+                                <ChapterDrawer
+                                    chapters=chapters
+                                    current_idx=current_chapter_idx
+                                    on_close=move |_| set_chapters_open.set(false)
+                                />
+                            })}
+                        </aside>
+                    }.into_any()
+                }}
             </div>
 
             <div class="reader-progress" aria-hidden=move || book_fraction.get().is_none().to_string()>
@@ -712,25 +766,6 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                     .unwrap_or_else(|| "—".to_string())
                 }
             </div>
-
-            {move || bookmarks_open.get().then(|| view! {
-                <BookmarkDrawer
-                    bookmarks=bookmarks
-                    error=bookmark_error
-                    set_error=set_bookmark_error
-                    refresh=refresh_bookmarks
-                    on_close=move |_| set_bookmarks_open.set(false)
-                    on_add=on_add_bookmark
-                />
-            })}
-
-            {move || chapters_open.get().then(|| view! {
-                <ChapterDrawer
-                    chapters=chapters
-                    current_idx=current_chapter_idx
-                    on_close=move |_| set_chapters_open.set(false)
-                />
-            })}
         </main>
     }
 }
