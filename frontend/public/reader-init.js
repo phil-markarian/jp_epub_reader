@@ -350,6 +350,37 @@ const computeLiveChapterFlatIndex = (view) => {
         if (passed(docNodes[i])) posInSection = i;
         else break;
     }
+    // ---- TEMP DEBUG: throttled to ~1/sec
+    const now = Date.now();
+    if (!window.__JP_READER._chDbgT || now - window.__JP_READER._chDbgT > 1000) {
+        window.__JP_READER._chDbgT = now;
+        const first = docNodes[0];
+        const mid = docNodes[Math.floor(docNodes.length / 2)];
+        const last = docNodes[docNodes.length - 1];
+        const dump = (el) => el && {
+            text: el.textContent?.trim().slice(0, 8),
+            l: Math.round(el.getBoundingClientRect().left),
+            r: Math.round(el.getBoundingClientRect().right),
+            t: Math.round(el.getBoundingClientRect().top),
+        };
+        console.log("[chapter-tracker]", {
+            section: sectionIndex,
+            wm,
+            iframeL: Math.round(iframeBcr.left),
+            iframeR: Math.round(iframeBcr.right),
+            iframeW: Math.round(iframeBcr.width),
+            rendererL: Math.round(rendererBcr.left),
+            rendererR: Math.round(rendererBcr.right),
+            iframeLeadingX: Math.round(iframeLeadingX),
+            iframeTrailingX: Math.round(iframeTrailingX),
+            docNodesLen: docNodes.length,
+            first: dump(first),
+            mid: dump(mid),
+            last: dump(last),
+            posInSection,
+        });
+    }
+    // ---- /TEMP DEBUG
 
     // No chapter element in the current section has been entered —
     // we're either above the first chap1/chap2 in this section, or
