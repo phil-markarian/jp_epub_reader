@@ -262,6 +262,121 @@ const composeChapterLabelWithToc = (parts, tocLabel) => {
     return pieces.length ? pieces.join(" · ") : null;
 };
 
+/**
+ * Live, BCR-driven chapter detection. Foliate's relocate event is
+ * debounced to ~250ms in scrolled flow, so the highlighted row in
+ * the chapter drawer lags behind the scroll position. This walks the
+ * cached chapter list for the currently-visible section and uses the
+ * live `getBoundingClientRect()` of each chapter element to pick
+ * whichever one is at or before the viewport's leading edge — which
+ * we can recompute on every rAF tick without waiting for relocate.
+ *
+ * Returns null when no chapter cache exists or no section is loaded.
+ */
+const computeLiveChapterFlatIndex = (view) => {
+    const renderer = view?.renderer;
+    if (!renderer || typeof renderer.getContents !== "function") return null;
+    const contents = renderer.getContents();
+    if (!Array.isArray(contents) || contents.length === 0) return null;
+    const { doc, index: sectionIndex } = contents[0];
+    if (!doc || typeof sectionIndex !== "number") return null;
+
+    const flat = window.__JP_READER?.getChapterList?.() || [];
+    if (!flat.length) return null;
+
+    const win = doc.defaultView;
+    if (!win) return null;
+    const cs = win.getComputedStyle(doc.documentElement);
+    const wm = (cs?.writingMode || "horizontal-tb").toLowerCase();
+    const isVerticalRL = wm.startsWith("vertical-rl");
+    const innerW = win.innerWidth || 0;
+    const innerH = win.innerHeight || 0;
+
+    // "Has this chapter heading entered the viewport's leading edge?"
+    // vertical-rl: right edge of the element is at or left of the
+    // viewport's right edge (chapter has scrolled into view).
+    // horizontal-tb scrolled: top of element is at or above the
+    // viewport's top.
+    // horizontal-tb paginated: left of element is at or left of the
+    // viewport's left.
+    const passed = (el) => {
+        const r = el.getBoundingClientRect();
+        if (isVerticalRL) return r.right <= innerW + 1;
+        return r.top <= 1;
+    };
+
+    const docNodes = doc.querySelectorAll(CHAPTER_SELECTOR);
+    let posInSection = -1;
+    for (let i = 0; i < docNodes.length; i++) {
+        if (passed(docNodes[i])) posInSection = i;
+        else break;
+    }
+
+    // No chapter element in the current section has been entered —
+    // we're either above the first chap1/chap2 in this section, or
+    // this section has no markers. Fall back to the latest chapter
+    // from prior sections.
+    if (posInSection < 0) {
+        let cand = -1;
+        for (let i = 0; i < flat.length; i++) {
+            if (flat[i].sectionIndex < sectionIndex) cand = i;
+            else break;
+        }
+        return cand >= 0 ? cand : null;
+    }
+
+    // Walk flat list to find the position-th entry in this section.
+    let nthInSection = 0;
+    for (let i = 0; i < flat.length; i++) {
+        const f = flat[i];
+        if (f.sectionIndex !== sectionIndex) continue;
+        if (nthInSection === posInSection) return i;
+        nthInSection++;
+    }
+    return null;
+};
+
+/**
+ * Install a chapter-change tracker on the live view. Listens to the
+ * renderer's undebounced 'scroll' event (and relocate as a backstop),
+ * rAF-throttles, and fires the registered callback whenever the
+ * computed flat chapter index differs from the last reported one.
+ *
+ * Idempotent — re-mounting a view with the same global state will
+ * just reset the lastIdx tracker; the listeners are bound to the
+ * renderer, which is replaced on each mount().
+ */
+const installChapterTracker = (view) => {
+    const renderer = view?.renderer;
+    if (!renderer) return;
+
+    let pending = false;
+    const fire = () => {
+        if (pending) return;
+        pending = true;
+        requestAnimationFrame(() => {
+            pending = false;
+            const idx = computeLiveChapterFlatIndex(view);
+            const last = window.__JP_READER._lastChapterIdx ?? null;
+            if (idx === last) return;
+            window.__JP_READER._lastChapterIdx = idx;
+            const cb = window.__JP_READER._chapterChangeCb;
+            if (typeof cb === "function") {
+                try { cb(idx); }
+                catch (e) { console.warn("[reader-init] chapter cb threw", e); }
+            }
+        });
+    };
+
+    renderer.addEventListener("scroll", fire);
+    view.addEventListener("relocate", fire);
+    view.addEventListener("load", fire);
+
+    // Prime once after install so the initial chapter highlights
+    // even without any user interaction.
+    fire();
+};
+
 const savedLocationFromRelocate = (detail) => {
     if (typeof detail?.cfi === "string" && detail.cfi.length > 0) {
         return detail.cfi;
@@ -685,6 +800,11 @@ window.__JP_READER = {
             }
 
             window.__JP_READER._lastView = view;
+            // Live chapter highlight tracker — feeds the registered
+            // callback whenever the computed flat chapter index
+            // changes. Independent of relocate's 250ms debounce.
+            window.__JP_READER._lastChapterIdx = null;
+            installChapterTracker(view);
             return {
                 view,
                 flow: window.__JP_READER._flow || "paginated",
@@ -738,6 +858,23 @@ window.__JP_READER = {
             }
         }
         return out;
+    },
+
+    /**
+     * Register a callback invoked whenever the live chapter tracker
+     * detects a change (rAF-throttled, scroll-driven — independent
+     * of relocate's debounce). Callback receives the new flat index
+     * (or null) and runs once at install time to prime the UI.
+     */
+    setChapterChangeCallback(cb) {
+        window.__JP_READER._chapterChangeCb =
+            typeof cb === "function" ? cb : null;
+        // Immediately fire with the current value so the UI doesn't
+        // have to wait for the next scroll/relocate tick.
+        if (typeof cb === "function") {
+            try { cb(window.__JP_READER._lastChapterIdx ?? null); }
+            catch (e) { console.warn("[reader-init] chapter cb prime threw", e); }
+        }
     },
 
     /**

@@ -70,6 +70,9 @@ extern "C" {
 
     #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "getCurrentChapterIndex")]
     fn jp_get_current_chapter_index() -> JsValue;
+
+    #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "setChapterChangeCallback")]
+    fn jp_set_chapter_change_callback(cb: JsValue);
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -357,6 +360,24 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
             // lifetime — matches the pattern used by the keyboard
             // closure below.
             relocate_cb.forget();
+
+            // Live chapter tracker — fired by the scroll-driven path
+            // in reader-init.js, independent of Foliate's 250ms
+            // relocate debounce. Keeps the chapter drawer highlight
+            // glued to the user's actual scroll position.
+            let chapter_cb = Closure::wrap(Box::new(move |idx: JsValue| {
+                if let Some(n) = idx.as_f64() {
+                    if n.is_finite() && n >= 0.0 {
+                        set_current_chapter_idx.set(Some(n as usize));
+                        return;
+                    }
+                }
+                set_current_chapter_idx.set(None);
+            }) as Box<dyn FnMut(JsValue)>);
+            let chapter_js: JsValue = chapter_cb.as_ref().clone();
+            chapter_cb.forget();
+            jp_set_chapter_change_callback(chapter_js);
+
             match jp_mount(stage_el, blob, work_id, relocate_js, JsValue::NULL).await {
                 Ok(v) => {
                     if let Ok(result) = serde_wasm_bindgen::from_value::<MountResult>(v) {
