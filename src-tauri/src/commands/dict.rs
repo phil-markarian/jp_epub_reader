@@ -115,32 +115,47 @@ pub fn delete_dictionary(
     state.dict_db.delete_dictionary(id).map_err(|e| e.to_string())
 }
 
-/// Walk `root` (one level deep + immediate subdirectories) and collect
-/// every `.zip` file. Matches the shoui collection's layout where
-/// `.zip` files sit inside category folders (`Bilingual/`, `Grammar/`,
-/// etc.) under a single root, but also handles a flat folder of zips.
+/// Recursively walk `root` and collect every `.zip` file at any depth.
+/// Handles flat folders (drop a bunch of zips in one place), the shoui
+/// collection's category layout (`root/Bilingual/*.zip`), and
+/// arbitrarily deeper nests (`root/Monolingual/Series/*.zip`).
+///
+/// Skips hidden entries (anything starting with `.`) and the
+/// `__MACOSX` cruft that macOS adds to zips. Does NOT follow
+/// symlinks to avoid infinite loops on misconfigured trees.
 fn collect_zips(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    push_zips_from_dir(root, &mut out);
-    if let Ok(rd) = std::fs::read_dir(root) {
-        for entry in rd.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                push_zips_from_dir(&path, &mut out);
-            }
-        }
-    }
+    walk_for_zips(root, &mut out, 0);
     out.sort();
     out.dedup();
     out
 }
 
-fn push_zips_from_dir(dir: &Path, out: &mut Vec<PathBuf>) {
+fn walk_for_zips(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
+    // Belt-and-suspenders: hard cap recursion in case someone creates
+    // a circular junction. 32 levels is well past any sane dict tree.
+    if depth > 32 {
+        return;
+    }
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for entry in rd.flatten() {
+        let Ok(file_type) = entry.file_type() else { continue };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with('.') || name_str == "__MACOSX" {
+            continue;
+        }
         let path = entry.path();
-        if path.is_file()
-            && path.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("zip"))
+        if file_type.is_dir() {
+            walk_for_zips(&path, out, depth + 1);
+        } else if file_type.is_file()
+            && path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("zip"))
                 == Some(true)
         {
             out.push(path);
