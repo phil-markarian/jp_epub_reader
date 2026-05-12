@@ -658,7 +658,7 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
             <div class="reader-titlebar" data-tauri-drag-region="true">
                 {move || entry.get().map(|e| {
                     let body = match e.author.as_ref() {
-                        Some(a) => format!("{a}: {}", e.title),
+                        Some(a) => format!("{a} - {}", e.title),
                         None => e.title.clone(),
                     };
                     view! { <span class="reader-title" data-tauri-drag-region="true">{body}</span> }

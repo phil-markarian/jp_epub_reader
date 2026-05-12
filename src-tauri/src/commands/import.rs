@@ -180,7 +180,7 @@ pub async fn open_reader_window(
     }
 
     let title = match entry.author.as_ref() {
-        Some(author) => format!("{author}: {}", entry.title),
+        Some(author) => format!("{author} - {}", entry.title),
         None => entry.title.clone(),
     };
 
