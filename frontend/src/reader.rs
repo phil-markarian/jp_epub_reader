@@ -655,9 +655,8 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
 
     view! {
         <main class="reader-shell">
-            <header class="reader-toolbar">
-                <div class="reader-toolbar-left">
-                    <span class="muted">"work " {work_id}</span>
+            <header class="reader-toolbar" data-tauri-drag-region="true">
+                <div class="reader-toolbar-left" data-tauri-drag-region="true">
                     {move || {
                         let s = status.get();
                         if s.is_empty() {
@@ -667,13 +666,13 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                         }
                     }}
                 </div>
-                <div class="reader-toolbar-center">
+                <div class="reader-toolbar-center" data-tauri-drag-region="true">
                     {move || entry.get().map(|e| {
                         let body = match e.author.as_ref() {
                             Some(a) => format!("{a}: {}", e.title),
                             None => e.title.clone(),
                         };
-                        view! { <span class="reader-title">{body}</span> }
+                        view! { <span class="reader-title" data-tauri-drag-region="true">{body}</span> }
                     })}
                 </div>
                 <div class="reader-toolbar-right">
