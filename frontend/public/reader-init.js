@@ -284,54 +284,70 @@ const computeLiveChapterFlatIndex = (view) => {
     const flat = window.__JP_READER?.getChapterList?.() || [];
     if (!flat.length) return null;
 
-    // Convert each chapter's iframe-internal BCR into Foliate's own
-    // linear scroll coordinate (the system renderer.start /
-    // renderer.end live in). We replicate the paginator's private
-    // #getRectMapper formula so we can compare apples-to-apples
-    // against renderer.start.
+    // Strategy: project the viewport's leading edge from screen
+    // coordinates back into iframe-internal coordinates, then walk
+    // chapter elements (whose BCRs are iframe-internal) and pick
+    // the latest one whose entry edge is at or behind the leading
+    // edge in reading direction.
     //
-    // For vertical-rl (Japanese): linearStart = size - rect.right.
-    // For vertical-lr:            linearStart = rect.left.
-    // For horizontal-tb scrolled: linearStart = rect.top.
-    // For horizontal-tb paginated ltr: linearStart = rect.left.
+    // - vertical-rl: reading flows right→left. New chapters enter
+    //   from the LEFT side of the viewport (smaller screen-x).
+    //   Project rendererBcr.left into iframe coords:
+    //     iframeLeadingX = rendererBcr.left - iframeBcr.left
+    //   A chapter is "reached" when its iframe-internal r.right
+    //   (its entry edge, since vertical-rl content's right-edge is
+    //   the FIRST point read) is >= iframeLeadingX. (Earlier
+    //   chapters have larger r.right; later chapters have smaller.)
     //
-    // `size` is viewSize in scrolled mode (the iframe element's long
-    // axis) or pages*size in paginated mode (total scrollable
-    // distance across the columnar layout).
-    const cs = doc.defaultView?.getComputedStyle?.(doc.documentElement);
+    // - vertical-lr / horizontal-tb scrolled / horizontal paginated:
+    //   analogous, with sign / axis flipped per writing mode.
+    //
+    // We don't need renderer.viewSize / start / end here. iframe
+    // BCR (in parent coords) + chapter BCR (in iframe coords) +
+    // renderer BCR (the visible viewport's screen position) is all
+    // the math needs, and all three are public reads.
+    const win = doc.defaultView;
+    const iframeEl = win?.frameElement;
+    if (!iframeEl) return null;
+    const iframeBcr = iframeEl.getBoundingClientRect();
+    const rendererBcr = renderer.getBoundingClientRect();
+
+    const cs = win?.getComputedStyle?.(doc.documentElement);
     const wm = (cs?.writingMode || "horizontal-tb").toLowerCase();
     const isVerticalRL = wm.startsWith("vertical-rl");
     const isVerticalLR = wm.startsWith("vertical-lr");
-    const isScrolled = renderer.getAttribute?.("flow") === "scrolled";
 
-    const viewSize = Number(renderer.viewSize) || 0;
-    const pages = Number(renderer.pages) || 0;
-    const size = Number(renderer.size) || 0;
-    const totalSize = isScrolled ? viewSize : pages * size;
-    if (!Number.isFinite(totalSize) || totalSize <= 0) return null;
+    // Project the viewport's leading edge from parent-screen coords
+    // into iframe-internal coords (since chapter BCRs read inside
+    // the iframe are in iframe-internal coords).
+    const iframeLeadingX = rendererBcr.left - iframeBcr.left;
+    const iframeTrailingX = rendererBcr.right - iframeBcr.left;
+    const iframeLeadingY = rendererBcr.top - iframeBcr.top;
 
-    const start = Number(renderer.start) || 0;
-    const end = Number(renderer.end) || (start + size);
-
-    const linearStart = (el) => {
+    const passed = (el) => {
         const r = el.getBoundingClientRect();
-        if (isVerticalRL) return totalSize - r.right;
-        if (isVerticalLR) return r.left;
-        if (isScrolled) return r.top;
-        return r.left;
+        if (isVerticalRL) {
+            // Entry edge for a chapter in vertical-rl is its right
+            // edge (rightmost x = first read). It's been entered
+            // once that edge is at or right-of the viewport's
+            // leading edge in iframe coords.
+            return r.right >= iframeLeadingX;
+        }
+        if (isVerticalLR) {
+            // vertical-lr: entry edge is the left, viewport's
+            // leading edge is its right edge (trailing in LTR
+            // screen, but leading for content flow).
+            return r.left <= iframeTrailingX;
+        }
+        // horizontal-tb: entry edge is the top. Leading edge is
+        // viewport top.
+        return r.top <= iframeLeadingY;
     };
 
-    // A chapter is "passed" — i.e., the user has reached it — once
-    // its heading's linear position is at or before the visible
-    // region's LEADING edge (end). That makes the highlight flip
-    // to the new chapter the instant its heading enters the
-    // viewport, not after it has fully scrolled past.
     const docNodes = doc.querySelectorAll(CHAPTER_SELECTOR);
     let posInSection = -1;
     for (let i = 0; i < docNodes.length; i++) {
-        const ls = linearStart(docNodes[i]);
-        if (!Number.isFinite(ls)) continue;
-        if (ls <= end) posInSection = i;
+        if (passed(docNodes[i])) posInSection = i;
         else break;
     }
 
