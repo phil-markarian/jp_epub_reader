@@ -179,19 +179,17 @@ pub async fn open_reader_window(
         return Ok(());
     }
 
-    let title = format!(
-        "{}{}",
-        entry.title,
-        entry
-            .author
-            .as_ref()
-            .map(|a| format!(" — {a}"))
-            .unwrap_or_default()
-    );
+    let title = match entry.author.as_ref() {
+        Some(author) => format!("{author}: {}", entry.title),
+        None => entry.title.clone(),
+    };
 
     let url = tauri::WebviewUrl::App(format!("index.html?reader={work_id}").into());
     tauri::WebviewWindowBuilder::new(&app, &label, url)
         .title(title)
+        // Centers the window title in the macOS title bar (the
+        // default style ends up left-aligned in some configurations).
+        .title_bar_style(tauri::TitleBarStyle::Visible)
         .inner_size(900.0, 1100.0)
         .min_inner_size(480.0, 600.0)
         .build()
