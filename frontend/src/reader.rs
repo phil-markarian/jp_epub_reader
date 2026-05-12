@@ -782,6 +782,7 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                                 <ChapterDrawer
                                     chapters=chapters
                                     current_idx=current_chapter_idx
+                                    set_current_idx=set_current_chapter_idx
                                     on_close=move |_| set_chapters_open.set(false)
                                 />
                             })}
@@ -948,6 +949,7 @@ fn BookmarkDrawer(
 fn ChapterDrawer(
     chapters: ReadSignal<Vec<ChapterEntry>>,
     current_idx: ReadSignal<Option<usize>>,
+    set_current_idx: WriteSignal<Option<usize>>,
     on_close: impl Fn(leptos::ev::MouseEvent) + 'static,
 ) -> impl IntoView {
     let list_ref: NodeRef<leptos::html::Ul> = NodeRef::new();
@@ -1046,9 +1048,17 @@ fn ChapterDrawer(
                                         None => JsValue::NULL,
                                     };
                                     let idx_js = match index_in_section {
-                                        Some(i) => JsValue::from_f64(i as f64),
+                                        Some(j) => JsValue::from_f64(j as f64),
                                         None => JsValue::NULL,
                                     };
+                                    // Move the highlight optimistically — the
+                                    // user just told us which chapter they're
+                                    // going to. Foliate's relocate after the
+                                    // jump can return null for a moment if
+                                    // the landed range sits before the
+                                    // heading, which would leave the indicator
+                                    // parked on the old row.
+                                    set_current_idx.set(Some(i));
                                     jp_go_to_chapter(section_index, id_js, idx_js);
                                 };
                                 view! {
