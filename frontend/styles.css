@@ -204,6 +204,30 @@ details[open] > summary::before { transform: rotate(90deg); }
 .dict-status-unsupported-format { color: #b85c00; }
 .dict-status-broken { color: #b00020; }
 
+/* Import queue */
+.dict-queue { margin: 12px 0; }
+.dict-queue-table tbody tr { transition: background-color 200ms ease; }
+.queue-row.queue-running { background: rgba(116, 163, 255, 0.10); }
+.queue-row.queue-imported { background: rgba(82, 170, 100, 0.08); }
+.queue-row.queue-failed { background: rgba(176, 0, 32, 0.08); }
+.queue-status {
+  font-weight: 600;
+  font-size: 0.9em;
+}
+.queue-status.queue-queued { color: #888; font-weight: 400; }
+.queue-status.queue-running {
+  color: #1a4fb0;
+  /* Subtle pulse so the active row is obvious without a spinner. */
+  animation: queue-pulse 1.2s ease-in-out infinite;
+}
+.queue-status.queue-imported { color: #2a7a36; }
+.queue-status.queue-skipped { color: #888; font-weight: 400; }
+.queue-status.queue-failed { color: #b00020; }
+@keyframes queue-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
 .row {
   display: flex;
   flex-wrap: wrap;

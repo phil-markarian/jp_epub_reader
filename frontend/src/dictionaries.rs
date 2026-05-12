@@ -80,6 +80,37 @@ fn basename(path: &str) -> String {
         .to_string()
 }
 
+/// Per-zip status displayed in the import queue while a batch runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum QueueStatus {
+    Queued,
+    Running,
+    Imported,
+    Skipped,
+    Failed,
+}
+
+impl QueueStatus {
+    fn css_class(&self) -> &'static str {
+        match self {
+            QueueStatus::Queued => "queue-queued",
+            QueueStatus::Running => "queue-running",
+            QueueStatus::Imported => "queue-imported",
+            QueueStatus::Skipped => "queue-skipped",
+            QueueStatus::Failed => "queue-failed",
+        }
+    }
+    fn label(&self) -> &'static str {
+        match self {
+            QueueStatus::Queued => "Queued",
+            QueueStatus::Running => "Importing…",
+            QueueStatus::Imported => "Imported",
+            QueueStatus::Skipped => "Skipped",
+            QueueStatus::Failed => "Failed",
+        }
+    }
+}
+
 #[component]
 pub fn DictionariesPanel() -> impl IntoView {
     let (dicts, set_dicts) = signal::<Vec<Dictionary>>(Vec::new());
@@ -88,6 +119,16 @@ pub fn DictionariesPanel() -> impl IntoView {
     let (selected, set_selected) = signal::<std::collections::HashSet<String>>(
         std::collections::HashSet::new(),
     );
+    // Visual queue: maps each selected path to its current import
+    // status during/after a batch run. Empty between batches.
+    let (queue, set_queue) =
+        signal::<std::collections::BTreeMap<String, QueueStatus>>(
+            std::collections::BTreeMap::new(),
+        );
+    // Ordered list of paths in the queue (BTreeMap above sorts
+    // lexicographically; we want insertion order to match the user's
+    // selection / backend processing order).
+    let (queue_order, set_queue_order) = signal::<Vec<String>>(Vec::new());
     let (busy, set_busy) = signal::<bool>(false);
     let (scanning, set_scanning) = signal::<bool>(false);
     let (progress, set_progress) = signal::<Option<String>>(None);
@@ -120,6 +161,19 @@ pub fn DictionariesPanel() -> impl IntoView {
                     p.status,
                     basename(&p.path),
                 )));
+                // Update the visual queue for this path.
+                let next_status = match p.status.as_str() {
+                    "starting" => Some(QueueStatus::Running),
+                    "imported" => Some(QueueStatus::Imported),
+                    "skipped" => Some(QueueStatus::Skipped),
+                    "failed" => Some(QueueStatus::Failed),
+                    _ => None,
+                };
+                if let Some(ns) = next_status {
+                    set_queue.update(|q| {
+                        q.insert(p.path.clone(), ns);
+                    });
+                }
             }
         }) as Box<dyn FnMut(JsValue)>);
         spawn_local(async move {
@@ -184,14 +238,30 @@ pub fn DictionariesPanel() -> impl IntoView {
     };
 
     let on_import_selected = move |_| {
-        let chosen: Vec<String> = selected.get().into_iter().collect();
+        // Preserve the user's selection order by walking the preview
+        // rows instead of iterating the HashSet (which is unordered).
+        let sel_set = selected.get();
+        let chosen: Vec<String> = preview
+            .get()
+            .iter()
+            .filter(|r| sel_set.contains(&r.path))
+            .map(|r| r.path.clone())
+            .collect();
         if chosen.is_empty() {
             set_banner.set(Some("Nothing selected.".into()));
             return;
         }
         set_busy.set(true);
         set_banner.set(None);
-        set_progress.set(Some("Starting import…".into()));
+        set_progress.set(Some(format!("Queued {} dictionaries…", chosen.len())));
+        // Seed the queue with every selected path in Queued state so
+        // the UI shows the upcoming work before the first event lands.
+        let mut q = std::collections::BTreeMap::new();
+        for p in &chosen {
+            q.insert(p.clone(), QueueStatus::Queued);
+        }
+        set_queue.set(q);
+        set_queue_order.set(chosen.clone());
         spawn_local(async move {
             let args = js_sys::Object::new();
             let arr = js_sys::Array::new();
@@ -223,6 +293,10 @@ pub fn DictionariesPanel() -> impl IntoView {
                         "{total} processed: {imported} imported, {skipped} skipped, {failed} failed."
                     )));
                     set_progress.set(None);
+                    // Drop the scan preview + selection now that the
+                    // installed list reflects the new state; keep the
+                    // final queue table visible so the user can see
+                    // per-zip results.
                     set_preview.set(Vec::new());
                     set_selected.set(std::collections::HashSet::new());
                     refresh();
@@ -234,6 +308,11 @@ pub fn DictionariesPanel() -> impl IntoView {
             }
             set_busy.set(false);
         });
+    };
+
+    let clear_queue = move |_| {
+        set_queue.set(std::collections::BTreeMap::new());
+        set_queue_order.set(Vec::new());
     };
 
     let toggle_all = move |checked: bool| {
@@ -265,6 +344,84 @@ pub fn DictionariesPanel() -> impl IntoView {
                     {move || progress.get().map(|p| view! { <span class="muted">{p}</span> })}
                 </div>
                 {move || banner.get().map(|b| view! { <div class="banner">{b}</div> })}
+
+                {move || {
+                    let order = queue_order.get();
+                    if order.is_empty() {
+                        return view! { <span></span> }.into_any();
+                    }
+                    let map = queue.get();
+                    // Index name lookups against the most recent
+                    // preview scan so we can show dictionary titles in
+                    // the queue rather than just file paths.
+                    let names: std::collections::HashMap<String, String> = preview
+                        .get()
+                        .into_iter()
+                        .filter_map(|r| r.name.clone().map(|n| (r.path, n)))
+                        .collect();
+                    let total = order.len();
+                    let mut queued = 0usize;
+                    let mut running = 0usize;
+                    let mut imported = 0usize;
+                    let mut skipped = 0usize;
+                    let mut failed = 0usize;
+                    for path in &order {
+                        match map.get(path).cloned().unwrap_or(QueueStatus::Queued) {
+                            QueueStatus::Queued => queued += 1,
+                            QueueStatus::Running => running += 1,
+                            QueueStatus::Imported => imported += 1,
+                            QueueStatus::Skipped => skipped += 1,
+                            QueueStatus::Failed => failed += 1,
+                        }
+                    }
+                    let done = imported + skipped + failed;
+                    view! {
+                        <div class="dict-queue">
+                            <div class="row">
+                                <strong>"Import queue"</strong>
+                                <span class="muted">
+                                    {format!(
+                                        "{done} / {total} done — \
+                                         {imported} imported, {skipped} skipped, {failed} failed, \
+                                         {running} running, {queued} queued"
+                                    )}
+                                </span>
+                                {(!busy.get()).then(|| view! {
+                                    <button type="button" on:click=clear_queue>"Clear"</button>
+                                })}
+                            </div>
+                            <table class="dict-table dict-queue-table">
+                                <thead>
+                                    <tr>
+                                        <th>"#"</th>
+                                        <th>"Name"</th>
+                                        <th>"Status"</th>
+                                        <th>"File"</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {order.iter().enumerate().map(|(i, path)| {
+                                        let status = map.get(path).cloned()
+                                            .unwrap_or(QueueStatus::Queued);
+                                        let cls = status.css_class();
+                                        let label = status.label();
+                                        let display_name = names.get(path).cloned()
+                                            .unwrap_or_else(|| basename(path));
+                                        let file = basename(path);
+                                        view! {
+                                            <tr class=format!("queue-row {cls}")>
+                                                <td class="muted">{i + 1}</td>
+                                                <td>{display_name}</td>
+                                                <td class=format!("queue-status {cls}")>{label}</td>
+                                                <td class="muted dict-path">{file}</td>
+                                            </tr>
+                                        }
+                                    }).collect_view()}
+                                </tbody>
+                            </table>
+                        </div>
+                    }.into_any()
+                }}
 
                 {move || {
                     let rows = preview.get();
