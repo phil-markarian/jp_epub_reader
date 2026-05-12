@@ -92,29 +92,49 @@ const installDragRegionHandler = () => {
             "button, a, input, select, textarea, [contenteditable='true']",
         );
 
-    document.addEventListener("mousedown", (e) => {
-        if (e.button !== 0) return;
-        const target = e.target instanceof Element ? e.target : null;
-        if (!target) return;
-        if (isInteractive(target)) return;
-        const region = target.closest("[data-tauri-drag-region]");
-        if (!region) return;
-        e.preventDefault();
-        const label = currentWindowLabel();
-        invokeTauri("start_window_dragging", { label }).catch((err) =>
-            console.warn("[reader-init] start_window_dragging failed", err),
-        );
-    });
+    // Use the WINDOW for capture-phase mousedown — this guarantees we
+    // see the event before any Leptos-attached listener that might
+    // stopPropagation. Capture phase also runs before wry's internal
+    // drag-region detection, but since that detection seemingly does
+    // nothing here, that's fine.
+    window.addEventListener(
+        "mousedown",
+        (e) => {
+            if (e.button !== 0) return;
+            const target = e.target instanceof Element ? e.target : null;
+            if (!target) return;
+            if (isInteractive(target)) return;
+            const region = target.closest("[data-tauri-drag-region]");
+            if (!region) return;
+            console.log("[reader-init][drag] mousedown on drag region", {
+                target: target.tagName,
+                region: region.tagName + "." + region.className,
+                tauri: !!window.__TAURI__,
+                internals: !!window.__TAURI_INTERNALS__,
+            });
+            const label = currentWindowLabel();
+            invokeTauri("start_window_dragging", { label })
+                .then(() => console.log("[reader-init][drag] startDragging ok"))
+                .catch((err) =>
+                    console.warn("[reader-init][drag] startDragging failed", err),
+                );
+        },
+        true,
+    );
 
-    document.addEventListener("dblclick", (e) => {
-        const target = e.target instanceof Element ? e.target : null;
-        if (!target) return;
-        if (isInteractive(target)) return;
-        const region = target.closest("[data-tauri-drag-region]");
-        if (!region) return;
-        const label = currentWindowLabel();
-        invokeTauri("toggle_window_maximize", { label }).catch(() => {});
-    });
+    window.addEventListener(
+        "dblclick",
+        (e) => {
+            const target = e.target instanceof Element ? e.target : null;
+            if (!target) return;
+            if (isInteractive(target)) return;
+            const region = target.closest("[data-tauri-drag-region]");
+            if (!region) return;
+            const label = currentWindowLabel();
+            invokeTauri("toggle_window_maximize", { label }).catch(() => {});
+        },
+        true,
+    );
 };
 installDragRegionHandler();
 
