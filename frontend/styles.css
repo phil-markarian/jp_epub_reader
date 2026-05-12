@@ -662,6 +662,15 @@ html, body { height: 100%; }
   font-size: 0.85em;
   opacity: 0.85;
 }
+.chapter-row.chapter-current .chapter-jump {
+  background: rgba(116, 163, 255, 0.18);
+  border-color: rgba(116, 163, 255, 0.55);
+  font-weight: 600;
+  opacity: 1;
+}
+.chapter-row.chapter-current .chapter-jump:hover {
+  background: rgba(116, 163, 255, 0.28);
+}
 .chapter-label {
   flex: 1 1 auto;
   min-width: 0;

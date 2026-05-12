@@ -95,6 +95,11 @@ const setSectionChapters = (sectionIndex, list) => {
  * Pick the latest chapter in `list` whose DOM position is at or
  * before `range.startContainer`. Returns null when the range is
  * missing/incompatible (different document, etc.).
+ *
+ * AozoraEpub3 doesn't emit DOM ids on chap divs, so we locate each
+ * cache entry by re-running CHAPTER_SELECTOR on the live doc and
+ * indexing into the resulting NodeList. Order matches the order
+ * captured at extraction time.
  */
 const findChaptersAtOrBefore = (list, doc, range) => {
     if (!Array.isArray(list) || list.length === 0) return null;
@@ -103,12 +108,16 @@ const findChaptersAtOrBefore = (list, doc, range) => {
         && range.startContainer.getRootNode?.() !== doc) {
         return null;
     }
+    const nodes = doc.querySelectorAll(CHAPTER_SELECTOR);
     let chap1 = null;
     let chap2 = null;
     let chap3 = null;
     let lastLevel = 0;
     for (const ch of list) {
-        const el = ch.id ? doc.getElementById(ch.id) : null;
+        let el = ch.id ? doc.getElementById(ch.id) : null;
+        if (!el && typeof ch.indexInSection === "number") {
+            el = nodes[ch.indexInSection] ?? null;
+        }
         if (!el) continue;
         let before;
         try {
@@ -125,8 +134,6 @@ const findChaptersAtOrBefore = (list, doc, range) => {
         else if (ch.level === 3) { chap3 = ch; }
         lastLevel = ch.level;
     }
-    // If no chap1 was seen but a lower-level heading exists (e.g.
-    // 夢十夜 is all chap2), use those.
     return { chap1, chap2, chap3, lastLevel };
 };
 
@@ -722,6 +729,52 @@ window.__JP_READER = {
             }
         }
         return out;
+    },
+
+    /**
+     * Flat-list index (0-based) of the chapter the user is currently
+     * inside, or null if unknown. Uses the latest relocate detail so
+     * it stays accurate without re-scanning every render.
+     */
+    getCurrentChapterIndex() {
+        const detail = window.__JP_READER._lastRelocateDetail;
+        if (!detail) return null;
+        const sectionIndex = detail?.section?.current;
+        if (typeof sectionIndex !== "number") return null;
+        const flat = this.getChapterList();
+        if (!flat.length) return null;
+        const range = detail?.range;
+        const doc = range?.startContainer?.ownerDocument ?? null;
+        const docNodes = doc ? doc.querySelectorAll(CHAPTER_SELECTOR) : null;
+
+        let candidate = -1;
+        for (let i = 0; i < flat.length; i++) {
+            const e = flat[i];
+            if (e.sectionIndex < sectionIndex) {
+                candidate = i;
+                continue;
+            }
+            if (e.sectionIndex > sectionIndex) break;
+            // Same section as the user — compare DOM positions if we can.
+            if (!doc || !range || !docNodes) {
+                // Best effort: pick the first chapter of the section
+                // when we have no range to compare against.
+                if (candidate < 0) candidate = i;
+                continue;
+            }
+            const el = docNodes[e.indexInSection];
+            if (!el) continue;
+            let before;
+            try {
+                const cmp = el.compareDocumentPosition(range.startContainer);
+                before = (cmp & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 || cmp === 0;
+            } catch {
+                continue;
+            }
+            if (before) candidate = i;
+            else break;
+        }
+        return candidate >= 0 ? candidate : null;
     },
 
     /**

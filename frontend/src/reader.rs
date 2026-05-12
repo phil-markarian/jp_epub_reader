@@ -7,6 +7,7 @@ use leptos::task::spawn_local;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 
 #[wasm_bindgen]
 extern "C" {
@@ -66,6 +67,9 @@ extern "C" {
 
     #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "getChapterPosition")]
     fn jp_get_chapter_position(section_index: u32) -> JsValue;
+
+    #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "getCurrentChapterIndex")]
+    fn jp_get_current_chapter_index() -> JsValue;
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -270,6 +274,11 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
     let (theme, set_theme) = signal::<&'static str>("light");
     let (flow, set_flow) = signal::<&'static str>("paginated");
     let (book_fraction, set_book_fraction) = signal::<Option<f64>>(None);
+    // Active-chapter tracking lives up here so the relocate callback
+    // (built inside the mount Effect below) can capture the
+    // WriteSignal by move. The ChapterDrawer reads `current_chapter_idx`
+    // to highlight the matching row.
+    let (current_chapter_idx, set_current_chapter_idx) = signal::<Option<usize>>(None);
     let stage_ref: NodeRef<leptos::html::Div> = NodeRef::new();
 
     spawn_local(async move {
@@ -322,6 +331,16 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                 if let Some(f) = f {
                     set_book_fraction.set(Some(f));
                 }
+                // Keep the chapter drawer's highlighted row in sync
+                // even while it's already open.
+                let cur_raw = jp_get_current_chapter_index();
+                if let Some(idx) = cur_raw.as_f64() {
+                    if idx.is_finite() && idx >= 0.0 {
+                        set_current_chapter_idx.set(Some(idx as usize));
+                        return;
+                    }
+                }
+                set_current_chapter_idx.set(None);
             }) as Box<dyn FnMut(JsValue)>);
             let relocate_js: JsValue = relocate_cb.as_ref().clone();
             // Leak so the listener keeps firing for the window's
@@ -395,6 +414,16 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
         let raw = jp_get_chapter_list();
         if let Ok(list) = serde_wasm_bindgen::from_value::<Vec<ChapterEntry>>(raw) {
             set_chapters.set(list);
+        }
+        // Same call surface — refresh "what chapter am I on" too, so
+        // the drawer marks the current row when it opens.
+        let cur_raw = jp_get_current_chapter_index();
+        if let Some(idx) = cur_raw.as_f64() {
+            if idx.is_finite() && idx >= 0.0 {
+                set_current_chapter_idx.set(Some(idx as usize));
+            }
+        } else {
+            set_current_chapter_idx.set(None);
         }
     };
 
@@ -698,6 +727,7 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
             {move || chapters_open.get().then(|| view! {
                 <ChapterDrawer
                     chapters=chapters
+                    current_idx=current_chapter_idx
                     on_close=move |_| set_chapters_open.set(false)
                 />
             })}
@@ -849,8 +879,32 @@ fn BookmarkDrawer(
 #[component]
 fn ChapterDrawer(
     chapters: ReadSignal<Vec<ChapterEntry>>,
+    current_idx: ReadSignal<Option<usize>>,
     on_close: impl Fn(leptos::ev::MouseEvent) + 'static,
 ) -> impl IntoView {
+    let list_ref: NodeRef<leptos::html::Ul> = NodeRef::new();
+
+    // Scroll the highlighted row into view whenever the current
+    // chapter or the row list changes (covers both "drawer opens
+    // mid-book" and "user paginates while drawer is open").
+    Effect::new(move |_| {
+        let _ = chapters.get();
+        let Some(idx) = current_idx.get() else { return };
+        let Some(ul) = list_ref.get() else { return };
+        // .chapter-row.chapter-current is what we tag below.
+        if let Ok(Some(el)) = ul.query_selector(".chapter-row.chapter-current") {
+            if let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() {
+                let opts = web_sys::ScrollIntoViewOptions::new();
+                opts.set_behavior(web_sys::ScrollBehavior::Smooth);
+                opts.set_block(web_sys::ScrollLogicalPosition::Center);
+                html_el.scroll_into_view_with_scroll_into_view_options(&opts);
+            }
+        }
+        // No-op suppression for unused `idx` in some builds — its
+        // presence is what gates the scroll call above.
+        let _ = idx;
+    });
+
     view! {
         <aside class="bookmark-drawer chapter-drawer">
             <header class="bookmark-drawer-header">
@@ -868,14 +922,21 @@ fn ChapterDrawer(
                         </p>
                     }.into_any()
                 } else {
+                    let current = current_idx.get();
                     view! {
-                        <ul class="chapter-list">
-                            {rows.into_iter().map(|c| {
+                        <ul class="chapter-list" node_ref=list_ref>
+                            {rows.into_iter().enumerate().map(|(i, c)| {
                                 let level = c.level.clamp(1, 3);
                                 let section_index = c.section_index;
                                 let id_opt = c.id.clone();
                                 let label = c.label.clone();
                                 let index_in_section = c.index_in_section;
+                                let is_current = current == Some(i);
+                                let class = if is_current {
+                                    format!("chapter-row chapter-level-{level} chapter-current")
+                                } else {
+                                    format!("chapter-row chapter-level-{level}")
+                                };
                                 let on_click = move |_| {
                                     let id_js = match id_opt.clone() {
                                         Some(s) => JsValue::from_str(&s),
@@ -888,12 +949,13 @@ fn ChapterDrawer(
                                     jp_go_to_chapter(section_index, id_js, idx_js);
                                 };
                                 view! {
-                                    <li class=format!("chapter-row chapter-level-{level}")>
+                                    <li class=class>
                                         <button
                                             type="button"
                                             class="chapter-jump"
                                             on:click=on_click
                                             title="Jump to chapter"
+                                            aria-current=if is_current { "true" } else { "false" }
                                         >
                                             <span class="chapter-label">{label}</span>
                                             <span class="muted chapter-section">
@@ -1031,7 +1093,6 @@ fn make_blob(bytes: &JsValue) -> Result<web_sys::Blob, String> {
 }
 
 fn is_editable_target(target: Option<&web_sys::EventTarget>) -> bool {
-    use wasm_bindgen::JsCast;
     let Some(target) = target else { return false };
     if let Some(el) = target.dyn_ref::<web_sys::HtmlElement>() {
         if el.is_content_editable() {
