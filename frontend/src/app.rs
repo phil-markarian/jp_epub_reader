@@ -341,6 +341,7 @@ pub fn App() -> impl IntoView {
                 </label>
             </section>
 
+            <crate::dictionaries::DictionariesPanel />
             <LibraryPanel
                 library=library
                 refresh_library=refresh_library

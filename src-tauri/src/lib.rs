@@ -16,6 +16,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let app_cache_dir = app.path().app_cache_dir()?;
@@ -47,6 +48,9 @@ pub fn run() {
             commands::bookmark::list_bookmarks,
             commands::bookmark::update_bookmark_note,
             commands::bookmark::delete_bookmark,
+            commands::dict::import_dictionary_folder,
+            commands::dict::list_dictionaries,
+            commands::dict::delete_dictionary,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

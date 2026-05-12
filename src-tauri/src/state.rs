@@ -1,6 +1,7 @@
 //! Shared backend state held by the Tauri app.
 
 use jp_core::settings::Settings;
+use jp_dict::Db as DictDb;
 use jp_importer::aozora::{AozoraWork, JarPaths, JavaInfo};
 use jp_vocab::Db;
 use std::path::PathBuf;
@@ -19,6 +20,8 @@ pub struct AppState {
     pub jars: JarPaths,
     /// Library + (later) vocab database.
     pub db: Arc<Db>,
+    /// Yomitan-format dictionary store (dict.sqlite).
+    pub dict_db: Arc<DictDb>,
 }
 
 impl AppState {
@@ -31,6 +34,7 @@ impl AppState {
         std::fs::create_dir_all(&app_cache_dir)?;
         let settings = Settings::load(app_data_dir.join("settings.json"))?;
         let db = Arc::new(Db::open(&app_data_dir)?);
+        let dict_db = Arc::new(DictDb::open(&app_data_dir)?);
 
         let java = match jp_importer::aozora::java::detect() {
             Ok(j) => {
@@ -63,6 +67,7 @@ impl AppState {
             java,
             jars,
             db: db.clone(),
+            dict_db,
         };
 
         // Backfill the DB from any pre-Phase-3 imports (meta.json

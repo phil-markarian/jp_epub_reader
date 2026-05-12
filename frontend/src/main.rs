@@ -1,4 +1,5 @@
 mod app;
+mod dictionaries;
 mod reader;
 
 use leptos::prelude::*;
