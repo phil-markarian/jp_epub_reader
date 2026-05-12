@@ -280,10 +280,29 @@ button.primary:hover:not(:disabled) {
 .reader-toolbar {
   display: flex;
   gap: 14px;
-  align-items: baseline;
+  align-items: center;
   padding: 12px 18px;
   border-bottom: 1px solid #ddd;
   font-size: 0.92em;
+}
+.reader-toolbar-left,
+.reader-toolbar-right {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.reader-toolbar-right {
+  justify-content: flex-end;
+}
+.reader-toolbar-center {
+  flex: 0 1 auto;
+  text-align: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .reader-title { font-weight: 600; }
 html, body { height: 100%; }

@@ -656,44 +656,50 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
     view! {
         <main class="reader-shell">
             <header class="reader-toolbar">
-                <span class="muted">"work " {work_id}</span>
-                {move || entry.get().map(|e| view! {
-                    <span class="reader-title">{e.title.clone()}</span>
-                    {e.author.clone().map(|a| view! {
-                        <span class="muted reader-author">{a}</span>
-                    })}
-                })}
-                {move || {
-                    let s = status.get();
-                    if s.is_empty() {
-                        view! { <span></span> }.into_any()
-                    } else {
-                        view! { <span class="muted reader-status">{s}</span> }.into_any()
-                    }
-                }}
-                <div class="reader-spacer"></div>
-                <button type="button" class="reader-control" on:click=on_toggle_flow title="Toggle paginated / scrolled">
-                    {move || if flow.get() == "scrolled" { "⇅" } else { "⇆" }}
-                </button>
-                <button type="button" class="reader-control" on:click=on_cycle_theme title="Cycle theme">
-                    {move || match theme.get() {
-                        "dark" => "☾",
-                        "sepia" => "✶",
-                        _ => "☀",
+                <div class="reader-toolbar-left">
+                    <span class="muted">"work " {work_id}</span>
+                    {move || {
+                        let s = status.get();
+                        if s.is_empty() {
+                            view! { <span></span> }.into_any()
+                        } else {
+                            view! { <span class="muted reader-status">{s}</span> }.into_any()
+                        }
                     }}
-                </button>
-                <button type="button" class="reader-control" on:click=on_toggle_chapters title="Show chapters">
-                    "📑"
-                </button>
-                <button type="button" class="reader-control" on:click=on_add_bookmark title="Bookmark this page">
-                    "＋🔖"
-                </button>
-                <button type="button" class="reader-control" on:click=on_toggle_bookmarks title="Show bookmarks">
-                    "🔖"
-                </button>
-                <button type="button" class="reader-control" on:click=on_toggle_settings title="Settings">
-                    "⚙"
-                </button>
+                </div>
+                <div class="reader-toolbar-center">
+                    {move || entry.get().map(|e| {
+                        let body = match e.author.as_ref() {
+                            Some(a) => format!("{a}: {}", e.title),
+                            None => e.title.clone(),
+                        };
+                        view! { <span class="reader-title">{body}</span> }
+                    })}
+                </div>
+                <div class="reader-toolbar-right">
+                    <button type="button" class="reader-control" on:click=on_toggle_flow title="Toggle paginated / scrolled">
+                        {move || if flow.get() == "scrolled" { "⇅" } else { "⇆" }}
+                    </button>
+                    <button type="button" class="reader-control" on:click=on_cycle_theme title="Cycle theme">
+                        {move || match theme.get() {
+                            "dark" => "☾",
+                            "sepia" => "✶",
+                            _ => "☀",
+                        }}
+                    </button>
+                    <button type="button" class="reader-control" on:click=on_toggle_chapters title="Show chapters">
+                        "📑"
+                    </button>
+                    <button type="button" class="reader-control" on:click=on_add_bookmark title="Bookmark this page">
+                        "＋🔖"
+                    </button>
+                    <button type="button" class="reader-control" on:click=on_toggle_bookmarks title="Show bookmarks">
+                        "🔖"
+                    </button>
+                    <button type="button" class="reader-control" on:click=on_toggle_settings title="Settings">
+                        "⚙"
+                    </button>
+                </div>
             </header>
 
             <div class="reader-body">
