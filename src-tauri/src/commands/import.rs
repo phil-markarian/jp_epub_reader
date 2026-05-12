@@ -187,9 +187,11 @@ pub async fn open_reader_window(
     let url = tauri::WebviewUrl::App(format!("index.html?reader={work_id}").into());
     tauri::WebviewWindowBuilder::new(&app, &label, url)
         .title(title)
-        // AppKit consistently left-aligns Tauri window titles in
-        // this configuration. Hide the OS title text entirely and
-        // render a centered title in the in-app toolbar instead.
+        // Overlay style: keep the macOS traffic lights but let our
+        // toolbar render INTO the title-bar row instead of below it.
+        // hidden_title removes the native left-aligned title text;
+        // we draw a centered title in the toolbar instead.
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true)
         .inner_size(900.0, 1100.0)
         .min_inner_size(480.0, 600.0)
