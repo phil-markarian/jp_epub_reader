@@ -965,11 +965,12 @@ fn ChapterDrawer(
         let Some(ul) = list_ref.get() else { return };
         let Some(indicator) = indicator_ref.get() else { return };
         let indicator_el: web_sys::HtmlElement = (*indicator).clone().into();
-        let Some(idx) = current_idx.get() else {
-            // No current chapter — hide the indicator.
-            let _ = indicator_el.style().set_property("opacity", "0");
-            return;
-        };
+        // When current_idx briefly goes None (the relocate-derived
+        // path returns null at the very top of the first section
+        // before any chapter heading, and during fast navigation),
+        // leave the indicator parked at its last position instead of
+        // fading it out. Avoids the off/on flicker at book boundaries.
+        let Some(idx) = current_idx.get() else { return };
         let row_el = ul
             .query_selector(&format!(".chapter-row[data-idx=\"{idx}\"]"))
             .ok()
