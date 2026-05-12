@@ -57,6 +57,57 @@ const saveGlobalPrefs = (patch) => {
 };
 
 /* ──────────────────────────────────────────────────────────────────────
+ * Manual drag-region polyfill
+ *
+ * Tauri 2's runtime is supposed to intercept mousedown on elements with
+ * `data-tauri-drag-region` and call startDragging(), but in this build
+ * that interception isn't firing for the in-app toolbar that uses
+ * TitleBarStyle::Overlay (the toolbar sits in the title-bar row).
+ * Wire it up ourselves with the public Tauri JS API.
+ * ────────────────────────────────────────────────────────────────── */
+const installDragRegionHandler = () => {
+    if (window.__JP_DRAG_REGION_INSTALLED) return;
+    window.__JP_DRAG_REGION_INSTALLED = true;
+    document.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+        const target = e.target instanceof Element ? e.target : null;
+        if (!target) return;
+        // Don't hijack interactive controls inside a drag region.
+        if (target.closest("button, a, input, select, textarea, [contenteditable='true']")) {
+            return;
+        }
+        const region = target.closest("[data-tauri-drag-region]");
+        if (!region) return;
+        // Use the Tauri 2 window API. Fall back gracefully if not loaded yet.
+        const win = window.__TAURI__?.window?.getCurrentWindow?.()
+            ?? window.__TAURI__?.window?.getCurrentWebviewWindow?.()
+            ?? window.__TAURI__?.webviewWindow?.getCurrentWebviewWindow?.();
+        if (win && typeof win.startDragging === "function") {
+            e.preventDefault();
+            win.startDragging().catch((err) =>
+                console.warn("[reader-init] startDragging failed", err)
+            );
+        }
+    });
+    document.addEventListener("dblclick", (e) => {
+        const target = e.target instanceof Element ? e.target : null;
+        if (!target) return;
+        if (target.closest("button, a, input, select, textarea, [contenteditable='true']")) {
+            return;
+        }
+        const region = target.closest("[data-tauri-drag-region]");
+        if (!region) return;
+        // macOS double-click on the title bar toggles zoom / maximize.
+        const win = window.__TAURI__?.window?.getCurrentWindow?.()
+            ?? window.__TAURI__?.window?.getCurrentWebviewWindow?.();
+        if (win && typeof win.toggleMaximize === "function") {
+            win.toggleMaximize().catch(() => {});
+        }
+    });
+};
+installDragRegionHandler();
+
+/* ──────────────────────────────────────────────────────────────────────
  * Chapter resolution
  *
  * AozoraEpub3-converted EPUBs only put a fraction of their headings
