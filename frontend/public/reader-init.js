@@ -683,6 +683,50 @@ window.__JP_READER = {
         return composeChapterLabel(sectionChapterDefaults(sectionIndex));
     },
 
+    /**
+     * Flat list of every harvested chapter heading across the whole
+     * book in section order. Each entry is { sectionIndex, level,
+     * label, id }. Used by the chapters drawer.
+     */
+    getChapterList() {
+        const map = window.__JP_READER?._chaptersBySection;
+        if (!(map instanceof Map)) return [];
+        const indices = Array.from(map.keys()).sort((a, b) => a - b);
+        const out = [];
+        for (const idx of indices) {
+            const list = map.get(idx) || [];
+            for (const ch of list) {
+                if (!ch || !ch.label) continue;
+                out.push({
+                    sectionIndex: idx,
+                    level: ch.level,
+                    label: ch.label,
+                    id: ch.id || null,
+                });
+            }
+        }
+        return out;
+    },
+
+    /**
+     * Jump the reader to a specific chapter heading by section index
+     * and (optional) DOM id. Bypasses view.resolveNavigation because
+     * that path only accepts strings / CFIs / fractions; the renderer
+     * accepts the resolved {index, anchor} shape directly.
+     */
+    goToChapter(sectionIndex, chapterId) {
+        const view = window.__JP_READER?._lastView;
+        const renderer = view?.renderer;
+        if (!renderer || typeof renderer.goTo !== "function") return;
+        const idx = typeof sectionIndex === "number" ? sectionIndex : 0;
+        const anchor = typeof chapterId === "string" && chapterId.length > 0
+            ? (doc) => doc.getElementById(chapterId) ?? 0
+            : () => 0;
+        Promise.resolve(renderer.goTo({ index: idx, anchor })).catch((e) => {
+            console.warn("[reader-init] goToChapter failed", e);
+        });
+    },
+
     /** Cycle theme: light → dark → sepia → light. */
     cycleTheme() {
         const order = ["light", "dark", "sepia"];

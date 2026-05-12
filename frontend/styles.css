@@ -611,6 +611,64 @@ html, body { height: 100%; }
   font-size: 0.78em;
   align-self: flex-end;
 }
+
+/* Chapter drawer — reuses the bookmark-drawer shell, adds list/level styles. */
+.chapter-drawer .chapter-list {
+  list-style: none;
+  padding: 4px 8px 8px;
+  margin: 0;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chapter-row { margin: 0; padding: 0; }
+.chapter-row.chapter-level-1 { margin-top: 6px; }
+.chapter-row.chapter-level-1:first-child { margin-top: 0; }
+.chapter-jump {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  color: inherit;
+  font: inherit;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.chapter-jump:hover {
+  background: rgba(127, 127, 127, 0.1);
+  border-color: rgba(127, 127, 127, 0.25);
+}
+.chapter-row.chapter-level-1 .chapter-jump {
+  font-weight: 600;
+  font-size: 0.98em;
+}
+.chapter-row.chapter-level-2 .chapter-jump {
+  padding-left: 22px;
+  font-size: 0.9em;
+}
+.chapter-row.chapter-level-3 .chapter-jump {
+  padding-left: 36px;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+.chapter-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chapter-section {
+  flex: 0 0 auto;
+  font-size: 0.78em;
+}
 foliate-view {
   display: block;
   position: absolute;

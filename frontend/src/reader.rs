@@ -53,6 +53,22 @@ extern "C" {
 
     #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "resolveChapterForSection")]
     fn jp_resolve_chapter_for_section(section_index: u32) -> JsValue;
+
+    #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "getChapterList")]
+    fn jp_get_chapter_list() -> JsValue;
+
+    #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "goToChapter")]
+    fn jp_go_to_chapter(section_index: u32, chapter_id: JsValue);
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ChapterEntry {
+    #[serde(rename = "sectionIndex")]
+    section_index: u32,
+    level: u32,
+    label: String,
+    #[serde(default)]
+    id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -353,6 +369,30 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
     let (bookmarks, set_bookmarks) = signal::<Vec<Bookmark>>(Vec::new());
     let (bookmark_error, set_bookmark_error) = signal::<Option<String>>(None);
 
+    // Chapter list (derived from inline AozoraEpub3 markers cached at
+    // book open). Refreshed each time the drawer is opened because
+    // sections load lazily during paginated reading and the live
+    // cache picks up newer content.
+    let (chapters_open, set_chapters_open) = signal::<bool>(false);
+    let (chapters, set_chapters) = signal::<Vec<ChapterEntry>>(Vec::new());
+
+    let refresh_chapters = move || {
+        let raw = jp_get_chapter_list();
+        if let Ok(list) = serde_wasm_bindgen::from_value::<Vec<ChapterEntry>>(raw) {
+            set_chapters.set(list);
+        }
+    };
+
+    let on_toggle_chapters = move |_| {
+        let next = !chapters_open.get_untracked();
+        set_chapters_open.set(next);
+        if next {
+            refresh_chapters();
+            // Close the bookmark drawer if it's open — they share screen real estate.
+            set_bookmarks_open.set(false);
+        }
+    };
+
     let refresh_bookmarks = move || {
         spawn_local(async move {
             match invoke_typed::<_, Vec<Bookmark>>(
@@ -545,6 +585,9 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                         _ => "☀",
                     }}
                 </button>
+                <button type="button" class="reader-control" on:click=on_toggle_chapters title="Show chapters">
+                    "📑"
+                </button>
                 <button type="button" class="reader-control" on:click=on_add_bookmark title="Bookmark this page">
                     "＋🔖"
                 </button>
@@ -630,6 +673,13 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                     refresh=refresh_bookmarks
                     on_close=move |_| set_bookmarks_open.set(false)
                     on_add=on_add_bookmark
+                />
+            })}
+
+            {move || chapters_open.get().then(|| view! {
+                <ChapterDrawer
+                    chapters=chapters
+                    on_close=move |_| set_chapters_open.set(false)
                 />
             })}
         </main>
@@ -768,6 +818,66 @@ fn BookmarkDrawer(
                                         set_error=set_error
                                     />
                                 </li>
+                            }).collect_view()}
+                        </ul>
+                    }.into_any()
+                }
+            }}
+        </aside>
+    }
+}
+
+#[component]
+fn ChapterDrawer(
+    chapters: ReadSignal<Vec<ChapterEntry>>,
+    on_close: impl Fn(leptos::ev::MouseEvent) + 'static,
+) -> impl IntoView {
+    view! {
+        <aside class="bookmark-drawer chapter-drawer">
+            <header class="bookmark-drawer-header">
+                <h3>"Chapters"</h3>
+                <button type="button" class="reader-control" on:click=on_close title="Close">
+                    "×"
+                </button>
+            </header>
+            {move || {
+                let rows = chapters.get();
+                if rows.is_empty() {
+                    view! {
+                        <p class="muted bookmark-drawer-empty">
+                            "No chapter markers found in this book."
+                        </p>
+                    }.into_any()
+                } else {
+                    view! {
+                        <ul class="chapter-list">
+                            {rows.into_iter().map(|c| {
+                                let level = c.level.clamp(1, 3);
+                                let section_index = c.section_index;
+                                let id_opt = c.id.clone();
+                                let label = c.label.clone();
+                                let on_click = move |_| {
+                                    let id_js = match id_opt.clone() {
+                                        Some(s) => JsValue::from_str(&s),
+                                        None => JsValue::NULL,
+                                    };
+                                    jp_go_to_chapter(section_index, id_js);
+                                };
+                                view! {
+                                    <li class=format!("chapter-row chapter-level-{level}")>
+                                        <button
+                                            type="button"
+                                            class="chapter-jump"
+                                            on:click=on_click
+                                            title="Jump to chapter"
+                                        >
+                                            <span class="chapter-label">{label}</span>
+                                            <span class="muted chapter-section">
+                                                {format!("§{section_index}")}
+                                            </span>
+                                        </button>
+                                    </li>
+                                }
                             }).collect_view()}
                         </ul>
                     }.into_any()
