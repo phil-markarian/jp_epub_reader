@@ -9,6 +9,11 @@ const VERTICAL_DIR = "rtl"; // tategaki books page right-to-left
 const READER_STATE_VERSION = 1;
 
 const readerStateKey = (workId) => `jp-reader-state:v${READER_STATE_VERSION}:${workId}`;
+// Global prefs (theme + flow direction) are shared across all books —
+// these are presentation preferences for the reader chrome, not
+// per-book state. Per-work state (lastLocation, etc.) still lives in
+// the keyed `readerStateKey` entries above.
+const GLOBAL_PREFS_KEY = `jp-reader-prefs:v${READER_STATE_VERSION}`;
 
 const loadReaderState = (workId) => {
     try {
@@ -26,6 +31,26 @@ const saveReaderState = (workId, patch) => {
     try {
         const next = { ...loadReaderState(workId), ...patch };
         window.localStorage?.setItem(readerStateKey(workId), JSON.stringify(next));
+    } catch {
+        // Best-effort only.
+    }
+};
+
+const loadGlobalPrefs = () => {
+    try {
+        const raw = window.localStorage?.getItem(GLOBAL_PREFS_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return typeof parsed === "object" && parsed ? parsed : {};
+    } catch {
+        return {};
+    }
+};
+
+const saveGlobalPrefs = (patch) => {
+    try {
+        const next = { ...loadGlobalPrefs(), ...patch };
+        window.localStorage?.setItem(GLOBAL_PREFS_KEY, JSON.stringify(next));
     } catch {
         // Best-effort only.
     }
@@ -704,9 +729,14 @@ window.__JP_READER = {
             // an old book's cache over.
             window.__JP_READER._chaptersBySection = new Map();
             const saved = loadReaderState(workId);
-            window.__JP_READER._flow = saved.flow === "scrolled" ? "scrolled" : "paginated";
+            // Theme + flow are global presentation prefs — shared
+            // across all books. lastLocation stays per-work in `saved`.
+            const prefs = loadGlobalPrefs();
+            const prefFlow = prefs.flow ?? saved.flow;
+            const prefTheme = prefs.theme ?? saved.theme;
+            window.__JP_READER._flow = prefFlow === "scrolled" ? "scrolled" : "paginated";
             window.__JP_READER._theme =
-                saved.theme === "dark" || saved.theme === "sepia" ? saved.theme : "light";
+                prefTheme === "dark" || prefTheme === "sepia" ? prefTheme : "light";
 
             const view = document.createElement("foliate-view");
             container.append(view);
@@ -1022,7 +1052,7 @@ window.__JP_READER = {
         const cur = window.__JP_READER._theme || "light";
         const next = order[(order.indexOf(cur) + 1) % order.length];
         window.__JP_READER._theme = next;
-        saveReaderState(window.__JP_READER._workId, { theme: next });
+        saveGlobalPrefs({ theme: next });
         applyChromeColors(next);
         reapplyStyles();
         return next;
@@ -1030,7 +1060,7 @@ window.__JP_READER = {
 
     setTheme(theme) {
         window.__JP_READER._theme = theme;
-        saveReaderState(window.__JP_READER._workId, { theme });
+        saveGlobalPrefs({ theme });
         applyChromeColors(theme);
         reapplyStyles();
     },
@@ -1098,7 +1128,7 @@ window.__JP_READER = {
         const cur = window.__JP_READER._flow || "paginated";
         const next = cur === "paginated" ? "scrolled" : "paginated";
         window.__JP_READER._flow = next;
-        saveReaderState(window.__JP_READER._workId, { flow: next });
+        saveGlobalPrefs({ flow: next });
         const renderer = window.__JP_READER._lastView?.renderer;
         if (renderer) {
             renderer.setAttribute("flow", next);
