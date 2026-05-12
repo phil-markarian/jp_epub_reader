@@ -284,51 +284,54 @@ const computeLiveChapterFlatIndex = (view) => {
     const flat = window.__JP_READER?.getChapterList?.() || [];
     if (!flat.length) return null;
 
-    // Foliate scrolls an outer #container in the paginator's CLOSED
-    // shadow DOM, so renderer.shadowRoot is null from outside — but
-    // we can still reach the iframe element via doc.defaultView's
-    // frameElement back-reference, which crosses the shadow boundary
-    // because the iframe lives in its own window context. Element
-    // BCRs from inside the iframe are iframe-internal (never move
-    // under scroll); combining them with the iframe element's
-    // parent-screen BCR (which DOES shift as the outer container
-    // scrolls) gives us each chapter's true on-screen position.
-    const iframeEl = doc.defaultView?.frameElement || null;
-    if (!iframeEl) return null;
-    const iframeBcr = iframeEl.getBoundingClientRect();
-    // The paginator host element fills the visible viewport (its
-    // BCR equals the closed #container's BCR), so we use it as the
-    // visible-region reference frame.
-    const containerBcr = renderer.getBoundingClientRect();
-
+    // Convert each chapter's iframe-internal BCR into Foliate's own
+    // linear scroll coordinate (the system renderer.start /
+    // renderer.end live in). We replicate the paginator's private
+    // #getRectMapper formula so we can compare apples-to-apples
+    // against renderer.start.
+    //
+    // For vertical-rl (Japanese): linearStart = size - rect.right.
+    // For vertical-lr:            linearStart = rect.left.
+    // For horizontal-tb scrolled: linearStart = rect.top.
+    // For horizontal-tb paginated ltr: linearStart = rect.left.
+    //
+    // `size` is viewSize in scrolled mode (the iframe element's long
+    // axis) or pages*size in paginated mode (total scrollable
+    // distance across the columnar layout).
     const cs = doc.defaultView?.getComputedStyle?.(doc.documentElement);
     const wm = (cs?.writingMode || "horizontal-tb").toLowerCase();
     const isVerticalRL = wm.startsWith("vertical-rl");
     const isVerticalLR = wm.startsWith("vertical-lr");
+    const isScrolled = renderer.getAttribute?.("flow") === "scrolled";
 
-    // "Has this chapter heading's leading edge crossed the visible
-    // region's leading edge in screen coordinates?"
-    // - vertical-rl: text flows right→left, so a chapter is entered
-    //   when its screen-right edge has reached or passed the
-    //   container's right edge.
-    // - vertical-lr: opposite, entered when its left passes the
-    //   container's left.
-    // - horizontal-tb: entered when its top has passed the container
-    //   top (scrolled) or left (paginated ltr).
-    const passed = (el) => {
+    const viewSize = Number(renderer.viewSize) || 0;
+    const pages = Number(renderer.pages) || 0;
+    const size = Number(renderer.size) || 0;
+    const totalSize = isScrolled ? viewSize : pages * size;
+    if (!Number.isFinite(totalSize) || totalSize <= 0) return null;
+
+    const start = Number(renderer.start) || 0;
+    const end = Number(renderer.end) || (start + size);
+
+    const linearStart = (el) => {
         const r = el.getBoundingClientRect();
-        const screenLeft = iframeBcr.left + r.left;
-        const screenRight = iframeBcr.left + r.right;
-        const screenTop = iframeBcr.top + r.top;
-        if (isVerticalRL) return screenRight <= containerBcr.right + 1;
-        if (isVerticalLR) return screenLeft <= containerBcr.left + 1;
-        return screenTop <= containerBcr.top + 1;
+        if (isVerticalRL) return totalSize - r.right;
+        if (isVerticalLR) return r.left;
+        if (isScrolled) return r.top;
+        return r.left;
     };
 
+    // A chapter is "passed" — i.e., the user has reached it — once
+    // its heading's linear position is at or before the visible
+    // region's LEADING edge (end). That makes the highlight flip
+    // to the new chapter the instant its heading enters the
+    // viewport, not after it has fully scrolled past.
     const docNodes = doc.querySelectorAll(CHAPTER_SELECTOR);
     let posInSection = -1;
     for (let i = 0; i < docNodes.length; i++) {
-        if (passed(docNodes[i])) posInSection = i;
+        const ls = linearStart(docNodes[i]);
+        if (!Number.isFinite(ls)) continue;
+        if (ls <= end) posInSection = i;
         else break;
     }
 
