@@ -284,25 +284,44 @@ const computeLiveChapterFlatIndex = (view) => {
     const flat = window.__JP_READER?.getChapterList?.() || [];
     if (!flat.length) return null;
 
-    const win = doc.defaultView;
-    if (!win) return null;
-    const cs = win.getComputedStyle(doc.documentElement);
+    // Foliate scrolls the outer #container in the paginator's shadow
+    // DOM, NOT the iframe itself — the iframe stays put while the
+    // outer container slides over it. So element.getBoundingClientRect()
+    // from inside the iframe returns iframe-internal coords that
+    // never change as the user scrolls. We have to combine the
+    // iframe's PARENT-screen BCR (which does shift with outer scroll)
+    // with each chapter's iframe-internal BCR to recover its true
+    // visible position.
+    const shadow = renderer.shadowRoot;
+    const containerEl = shadow?.getElementById?.("container");
+    const iframeEl = containerEl?.querySelector?.("iframe")
+        ?? shadow?.querySelector?.("iframe");
+    if (!iframeEl || !containerEl) return null;
+    const iframeBcr = iframeEl.getBoundingClientRect();
+    const containerBcr = containerEl.getBoundingClientRect();
+
+    const cs = doc.defaultView?.getComputedStyle?.(doc.documentElement);
     const wm = (cs?.writingMode || "horizontal-tb").toLowerCase();
     const isVerticalRL = wm.startsWith("vertical-rl");
-    const innerW = win.innerWidth || 0;
-    const innerH = win.innerHeight || 0;
+    const isVerticalLR = wm.startsWith("vertical-lr");
 
-    // "Has this chapter heading entered the viewport's leading edge?"
-    // vertical-rl: right edge of the element is at or left of the
-    // viewport's right edge (chapter has scrolled into view).
-    // horizontal-tb scrolled: top of element is at or above the
-    // viewport's top.
-    // horizontal-tb paginated: left of element is at or left of the
-    // viewport's left.
+    // "Has this chapter heading's leading edge crossed the visible
+    // region's leading edge in screen coordinates?"
+    // - vertical-rl: text flows right→left, so a chapter is entered
+    //   when its screen-right edge has reached or passed the
+    //   container's right edge.
+    // - vertical-lr: opposite, entered when its left passes the
+    //   container's left.
+    // - horizontal-tb: entered when its top has passed the container
+    //   top (scrolled) or left (paginated ltr).
     const passed = (el) => {
         const r = el.getBoundingClientRect();
-        if (isVerticalRL) return r.right <= innerW + 1;
-        return r.top <= 1;
+        const screenLeft = iframeBcr.left + r.left;
+        const screenRight = iframeBcr.left + r.right;
+        const screenTop = iframeBcr.top + r.top;
+        if (isVerticalRL) return screenRight <= containerBcr.right + 1;
+        if (isVerticalLR) return screenLeft <= containerBcr.left + 1;
+        return screenTop <= containerBcr.top + 1;
     };
 
     const docNodes = doc.querySelectorAll(CHAPTER_SELECTOR);
