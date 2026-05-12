@@ -90,26 +90,9 @@ enum QueueStatus {
     Failed,
 }
 
-impl QueueStatus {
-    fn css_class(&self) -> &'static str {
-        match self {
-            QueueStatus::Queued => "queue-queued",
-            QueueStatus::Running => "queue-running",
-            QueueStatus::Imported => "queue-imported",
-            QueueStatus::Skipped => "queue-skipped",
-            QueueStatus::Failed => "queue-failed",
-        }
-    }
-    fn label(&self) -> &'static str {
-        match self {
-            QueueStatus::Queued => "Queued",
-            QueueStatus::Running => "Importing…",
-            QueueStatus::Imported => "Imported",
-            QueueStatus::Skipped => "Skipped",
-            QueueStatus::Failed => "Failed",
-        }
-    }
-}
+// The previous list-style queue table is gone — the new UI is a
+// single progress bar + counts — but we still need the discriminants
+// for tallying counts and identifying the running entry.
 
 #[component]
 pub fn DictionariesPanel() -> impl IntoView {
@@ -351,74 +334,75 @@ pub fn DictionariesPanel() -> impl IntoView {
                         return view! { <span></span> }.into_any();
                     }
                     let map = queue.get();
-                    // Index name lookups against the most recent
-                    // preview scan so we can show dictionary titles in
-                    // the queue rather than just file paths.
-                    let names: std::collections::HashMap<String, String> = preview
-                        .get()
-                        .into_iter()
-                        .filter_map(|r| r.name.clone().map(|n| (r.path, n)))
-                        .collect();
                     let total = order.len();
-                    let mut queued = 0usize;
-                    let mut running = 0usize;
+                    let mut running_path = None::<String>;
                     let mut imported = 0usize;
                     let mut skipped = 0usize;
                     let mut failed = 0usize;
                     for path in &order {
                         match map.get(path).cloned().unwrap_or(QueueStatus::Queued) {
-                            QueueStatus::Queued => queued += 1,
-                            QueueStatus::Running => running += 1,
+                            QueueStatus::Queued => {}
+                            QueueStatus::Running => running_path = Some(path.clone()),
                             QueueStatus::Imported => imported += 1,
                             QueueStatus::Skipped => skipped += 1,
                             QueueStatus::Failed => failed += 1,
                         }
                     }
                     let done = imported + skipped + failed;
+                    let pct = if total > 0 {
+                        (done as f64 / total as f64 * 100.0) as i32
+                    } else {
+                        0
+                    };
+                    // Resolve the running dict's display name from the
+                    // most recent preview scan (one-shot HashMap lookup).
+                    let running_label = running_path.as_ref().map(|p| {
+                        preview
+                            .get()
+                            .into_iter()
+                            .find(|r| &r.path == p)
+                            .and_then(|r| r.name)
+                            .unwrap_or_else(|| basename(p))
+                    });
                     view! {
                         <div class="dict-queue">
                             <div class="row">
-                                <strong>"Import queue"</strong>
+                                <strong>"Import progress"</strong>
                                 <span class="muted">
-                                    {format!(
-                                        "{done} / {total} done — \
-                                         {imported} imported, {skipped} skipped, {failed} failed, \
-                                         {running} running, {queued} queued"
-                                    )}
+                                    {format!("{done} / {total}")}
                                 </span>
                                 {(!busy.get()).then(|| view! {
                                     <button type="button" on:click=clear_queue>"Clear"</button>
                                 })}
                             </div>
-                            <table class="dict-table dict-queue-table">
-                                <thead>
-                                    <tr>
-                                        <th>"#"</th>
-                                        <th>"Name"</th>
-                                        <th>"Status"</th>
-                                        <th>"File"</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {order.iter().enumerate().map(|(i, path)| {
-                                        let status = map.get(path).cloned()
-                                            .unwrap_or(QueueStatus::Queued);
-                                        let cls = status.css_class();
-                                        let label = status.label();
-                                        let display_name = names.get(path).cloned()
-                                            .unwrap_or_else(|| basename(path));
-                                        let file = basename(path);
-                                        view! {
-                                            <tr class=format!("queue-row {cls}")>
-                                                <td class="muted">{i + 1}</td>
-                                                <td>{display_name}</td>
-                                                <td class=format!("queue-status {cls}")>{label}</td>
-                                                <td class="muted dict-path">{file}</td>
-                                            </tr>
-                                        }
-                                    }).collect_view()}
-                                </tbody>
-                            </table>
+                            <div class="dict-progress-bar" role="progressbar"
+                                aria-valuenow=pct
+                                aria-valuemin="0" aria-valuemax="100">
+                                <div
+                                    class="dict-progress-fill"
+                                    style=format!("width: {pct}%")
+                                ></div>
+                            </div>
+                            <div class="dict-progress-current">
+                                {match running_label {
+                                    Some(name) => view! {
+                                        <span class="queue-status queue-running">"Importing"</span>
+                                        " "
+                                        <strong>{name}</strong>
+                                    }.into_any(),
+                                    None if busy.get() => view! {
+                                        <span class="muted">"Waiting for next dictionary…"</span>
+                                    }.into_any(),
+                                    None => view! {
+                                        <span class="muted">"Done."</span>
+                                    }.into_any(),
+                                }}
+                            </div>
+                            <div class="dict-progress-counts muted">
+                                {format!(
+                                    "Imported {imported} • Skipped {skipped} • Failed {failed}"
+                                )}
+                            </div>
                         </div>
                     }.into_any()
                 }}
