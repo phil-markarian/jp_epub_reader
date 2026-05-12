@@ -25,6 +25,37 @@ pub struct ImportSummary {
     pub tag_count: usize,
 }
 
+/// Lightweight peek at a Yomitan zip's `index.json` — just enough to
+/// preview the dictionary's name, revision, and format version
+/// without parsing the term banks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexPeek {
+    pub title: String,
+    pub format: i32,
+    pub revision: Option<String>,
+}
+
+pub fn peek_index(zip_path: &Path) -> Result<IndexPeek> {
+    let file = std::fs::File::open(zip_path)
+        .map_err(|e| Error::Other(format!("open zip {zip_path:?}: {e}")))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| Error::Other(format!("read zip {zip_path:?}: {e}")))?;
+    let mut entry = archive
+        .by_name("index.json")
+        .map_err(|e| Error::Other(format!("zip missing index.json: {e}")))?;
+    let mut buf = String::new();
+    entry
+        .read_to_string(&mut buf)
+        .map_err(|e| Error::Other(format!("read index.json: {e}")))?;
+    let parsed: IndexJson = serde_json::from_str(&buf)
+        .map_err(|e| Error::Other(format!("parse index.json: {e}")))?;
+    Ok(IndexPeek {
+        title: parsed.title,
+        format: parsed.format,
+        revision: parsed.revision,
+    })
+}
+
 /// What index.json looks like at the top level. Only the fields we
 /// actually need; serde tolerates extras.
 #[derive(Debug, Deserialize)]

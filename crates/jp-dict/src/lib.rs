@@ -10,4 +10,4 @@ pub mod import;
 
 pub use db::Db;
 pub use dictionary::Dictionary;
-pub use import::ImportSummary;
+pub use import::{peek_index, ImportSummary, IndexPeek};

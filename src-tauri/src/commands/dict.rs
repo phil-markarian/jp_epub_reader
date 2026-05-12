@@ -7,8 +7,9 @@
 //! the frontend can render a counter.
 
 use crate::state::AppState;
-use jp_dict::{Dictionary, ImportSummary};
-use serde::Serialize;
+use jp_dict::{peek_index, Dictionary, ImportSummary};
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
 
@@ -37,23 +38,105 @@ pub struct ImportProgress<'a> {
     status: &'a str,
 }
 
+/// Lightweight per-zip preview returned by `scan_dictionary_folder`.
+/// Reads only the zip's `index.json` — no term bank parsing — so
+/// scanning a 147-zip collection takes a couple seconds rather than
+/// the many minutes a full import would take.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DictPreview {
+    pub path: String,
+    pub name: Option<String>,
+    pub revision: Option<String>,
+    pub format_version: Option<i32>,
+    pub status: DictPreviewStatus,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DictPreviewStatus {
+    /// Format 3, not already imported — safe to select.
+    Ready,
+    /// Same name is already in the dictionary table.
+    AlreadyImported,
+    /// index.json reports format != 3.
+    UnsupportedFormat,
+    /// Couldn't open the zip, missing index.json, or invalid JSON.
+    Broken,
+}
+
 #[tauri::command]
-pub fn import_dictionary_folder(
+pub fn scan_dictionary_folder(
     path: String,
-    app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<Vec<ImportOutcome>, String> {
+) -> Result<Vec<DictPreview>, String> {
     let root = PathBuf::from(&path);
     if !root.is_dir() {
         return Err(format!("not a directory: {path}"));
     }
 
+    // Snapshot existing dictionary names once so the per-zip preview
+    // can flag duplicates without a DB query per file.
+    let existing: HashSet<String> = state
+        .dict_db
+        .list_dictionaries()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
+
     let zips = collect_zips(&root);
-    let total = zips.len();
+    let mut out = Vec::with_capacity(zips.len());
+    for zip_path in &zips {
+        out.push(preview_zip(zip_path, &existing));
+    }
+    Ok(out)
+}
+
+fn preview_zip(zip_path: &Path, existing: &HashSet<String>) -> DictPreview {
+    let display = zip_path.to_string_lossy().to_string();
+    match peek_index(zip_path) {
+        Ok(idx) => {
+            let already = existing.contains(&idx.title);
+            let status = if already {
+                DictPreviewStatus::AlreadyImported
+            } else if idx.format != 3 {
+                DictPreviewStatus::UnsupportedFormat
+            } else {
+                DictPreviewStatus::Ready
+            };
+            DictPreview {
+                path: display,
+                name: Some(idx.title),
+                revision: idx.revision,
+                format_version: Some(idx.format),
+                status,
+                error: None,
+            }
+        }
+        Err(e) => DictPreview {
+            path: display,
+            name: None,
+            revision: None,
+            format_version: None,
+            status: DictPreviewStatus::Broken,
+            error: Some(e.to_string()),
+        },
+    }
+}
+
+#[tauri::command]
+pub fn import_dictionary_files(
+    paths: Vec<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<ImportOutcome>, String> {
+    let total = paths.len();
     let mut outcomes = Vec::with_capacity(total);
 
-    for (i, zip_path) in zips.iter().enumerate() {
-        let display = zip_path.to_string_lossy().to_string();
+    for (i, p) in paths.iter().enumerate() {
+        let display = p.clone();
         let _ = app.emit(
             "dictionary-import-progress",
             ImportProgress {
@@ -64,7 +147,8 @@ pub fn import_dictionary_folder(
             },
         );
 
-        let outcome = match state.dict_db.import_zip(zip_path) {
+        let zip_path = PathBuf::from(p);
+        let outcome = match state.dict_db.import_zip(&zip_path) {
             Ok(Some(summary)) => ImportOutcome::Imported {
                 path: display.clone(),
                 summary,

@@ -189,6 +189,20 @@ details[open] > summary::before { transform: rotate(90deg); }
 }
 .dict-table th { font-weight: 600; }
 .dict-table tbody tr:hover { background: rgba(127, 127, 127, 0.06); }
+.dict-preview { margin: 12px 0; }
+.dict-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dict-status { font-size: 0.85em; }
+.dict-status-ready { color: #2a7a36; }
+.dict-status-already-imported { color: #555; opacity: 0.85; }
+.dict-status-unsupported-format { color: #b85c00; }
+.dict-status-broken { color: #b00020; }
 
 .row {
   display: flex;

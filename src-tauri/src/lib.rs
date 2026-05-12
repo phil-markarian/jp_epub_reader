@@ -48,7 +48,8 @@ pub fn run() {
             commands::bookmark::list_bookmarks,
             commands::bookmark::update_bookmark_note,
             commands::bookmark::delete_bookmark,
-            commands::dict::import_dictionary_folder,
+            commands::dict::scan_dictionary_folder,
+            commands::dict::import_dictionary_files,
             commands::dict::list_dictionaries,
             commands::dict::delete_dictionary,
         ])
