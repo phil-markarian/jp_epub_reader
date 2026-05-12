@@ -683,9 +683,9 @@ html, body { height: 100%; }
 }
 .chapter-highlight[data-armed="true"] {
   transition:
-    transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1),
-    height 220ms cubic-bezier(0.22, 0.61, 0.36, 1),
-    opacity 120ms ease;
+    transform 140ms cubic-bezier(0.3, 0.7, 0.4, 1),
+    height 140ms cubic-bezier(0.3, 0.7, 0.4, 1),
+    opacity 90ms ease;
 }
 .chapter-row { margin: 0; padding: 0; }
 .chapter-row.chapter-level-1 { margin-top: 6px; }
