@@ -898,11 +898,37 @@ window.__JP_READER = {
     },
 
     /**
+     * Pin the current-chapter flat index to `idx` for `ms` ms (default
+     * 500). While the pin is active, getCurrentChapterIndex returns
+     * the pinned value, which lets the chapter drawer's row-click
+     * handler force the highlight onto the clicked chapter without
+     * the relocate-debounced detector immediately overriding it with
+     * whatever range.startContainer happens to resolve to after the
+     * jump (which can be the next chapter when the goTo anchor
+     * lands just past the heading element).
+     */
+    pinCurrentChapter(idx, ms) {
+        if (typeof idx !== "number" || idx < 0) {
+            window.__JP_READER._pinnedChapter = null;
+            return;
+        }
+        const timeout = typeof ms === "number" && ms > 0 ? ms : 500;
+        window.__JP_READER._pinnedChapter = {
+            flatIndex: idx,
+            expires: Date.now() + timeout,
+        };
+    },
+
+    /**
      * Flat-list index (0-based) of the chapter the user is currently
      * inside, or null if unknown. Uses the latest relocate detail so
      * it stays accurate without re-scanning every render.
      */
     getCurrentChapterIndex() {
+        const pinned = window.__JP_READER._pinnedChapter;
+        if (pinned && Date.now() < pinned.expires) {
+            return pinned.flatIndex;
+        }
         const detail = window.__JP_READER._lastRelocateDetail;
         if (!detail) return null;
         const sectionIndex = detail?.section?.current;

@@ -73,6 +73,9 @@ extern "C" {
 
     #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "setChapterChangeCallback")]
     fn jp_set_chapter_change_callback(cb: JsValue);
+
+    #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "pinCurrentChapter")]
+    fn jp_pin_current_chapter(idx: u32, ms: u32);
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1051,14 +1054,15 @@ fn ChapterDrawer(
                                         Some(j) => JsValue::from_f64(j as f64),
                                         None => JsValue::NULL,
                                     };
-                                    // Move the highlight optimistically — the
-                                    // user just told us which chapter they're
-                                    // going to. Foliate's relocate after the
-                                    // jump can return null for a moment if
-                                    // the landed range sits before the
-                                    // heading, which would leave the indicator
-                                    // parked on the old row.
+                                    // Move the highlight optimistically and
+                                    // pin the JS-side chapter index for a
+                                    // beat so the relocate-debounced
+                                    // recompute (which can resolve to the
+                                    // chapter PAST the heading once the goTo
+                                    // scroll lands) doesn't immediately
+                                    // override the user's pick.
                                     set_current_idx.set(Some(i));
+                                    jp_pin_current_chapter(i as u32, 700);
                                     jp_go_to_chapter(section_index, id_js, idx_js);
                                 };
                                 view! {
