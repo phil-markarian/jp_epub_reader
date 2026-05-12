@@ -58,7 +58,11 @@ extern "C" {
     fn jp_get_chapter_list() -> JsValue;
 
     #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "goToChapter")]
-    fn jp_go_to_chapter(section_index: u32, chapter_id: JsValue);
+    fn jp_go_to_chapter(
+        section_index: u32,
+        chapter_id: JsValue,
+        index_in_section: JsValue,
+    );
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -69,6 +73,8 @@ struct ChapterEntry {
     label: String,
     #[serde(default)]
     id: Option<String>,
+    #[serde(default, rename = "indexInSection")]
+    index_in_section: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -856,12 +862,17 @@ fn ChapterDrawer(
                                 let section_index = c.section_index;
                                 let id_opt = c.id.clone();
                                 let label = c.label.clone();
+                                let index_in_section = c.index_in_section;
                                 let on_click = move |_| {
                                     let id_js = match id_opt.clone() {
                                         Some(s) => JsValue::from_str(&s),
                                         None => JsValue::NULL,
                                     };
-                                    jp_go_to_chapter(section_index, id_js);
+                                    let idx_js = match index_in_section {
+                                        Some(i) => JsValue::from_f64(i as f64),
+                                        None => JsValue::NULL,
+                                    };
+                                    jp_go_to_chapter(section_index, id_js, idx_js);
                                 };
                                 view! {
                                     <li class=format!("chapter-row chapter-level-{level}")>

@@ -54,19 +54,32 @@ const saveReaderState = (workId, patch) => {
  * ────────────────────────────────────────────────────────────────── */
 
 const CHAPTER_CLASS_RE = /\bchap(\d+)\b/;
+// Selector used both to extract and re-locate chapter elements. AozoraEpub3
+// doesn't put DOM ids on the chap divs, so we navigate by "Nth match in
+// this document" instead.
+const CHAPTER_SELECTOR = '.chap1, .chap2, .chap3';
 
 const extractChaptersFromDoc = (doc) => {
     if (!doc?.querySelectorAll) return [];
     const out = [];
-    const nodes = doc.querySelectorAll('[class*="chap"]');
-    for (const el of nodes) {
+    const nodes = doc.querySelectorAll(CHAPTER_SELECTOR);
+    for (let i = 0; i < nodes.length; i++) {
+        const el = nodes[i];
         const m = (el.className || "").match(CHAPTER_CLASS_RE);
         if (!m) continue;
         const level = parseInt(m[1], 10);
         if (!Number.isFinite(level)) continue;
         const label = (el.textContent || "").replace(/\s+/g, " ").trim();
         if (!label) continue;
-        out.push({ level, label, id: el.id || null });
+        out.push({
+            level,
+            label,
+            id: el.id || null,
+            // Stable position in the section's chapter list. Used as
+            // an anchor when navigating — the rendered iframe doc
+            // matches the same CHAPTER_SELECTOR ordering.
+            indexInSection: i,
+        });
     }
     return out;
 };
@@ -686,7 +699,7 @@ window.__JP_READER = {
     /**
      * Flat list of every harvested chapter heading across the whole
      * book in section order. Each entry is { sectionIndex, level,
-     * label, id }. Used by the chapters drawer.
+     * label, id, indexInSection }. Used by the chapters drawer.
      */
     getChapterList() {
         const map = window.__JP_READER?._chaptersBySection;
@@ -702,6 +715,9 @@ window.__JP_READER = {
                     level: ch.level,
                     label: ch.label,
                     id: ch.id || null,
+                    indexInSection: typeof ch.indexInSection === "number"
+                        ? ch.indexInSection
+                        : null,
                 });
             }
         }
@@ -709,19 +725,28 @@ window.__JP_READER = {
     },
 
     /**
-     * Jump the reader to a specific chapter heading by section index
-     * and (optional) DOM id. Bypasses view.resolveNavigation because
-     * that path only accepts strings / CFIs / fractions; the renderer
-     * accepts the resolved {index, anchor} shape directly.
+     * Jump the reader to a specific chapter heading. AozoraEpub3 doesn't
+     * give chap divs DOM ids, so we navigate by chapter index within
+     * the section — querySelectorAll on the rendered iframe doc
+     * returns the same order we used at extraction time. Falls back
+     * to id when present, then to "top of section".
      */
-    goToChapter(sectionIndex, chapterId) {
+    goToChapter(sectionIndex, chapterId, indexInSection) {
         const view = window.__JP_READER?._lastView;
         const renderer = view?.renderer;
         if (!renderer || typeof renderer.goTo !== "function") return;
         const idx = typeof sectionIndex === "number" ? sectionIndex : 0;
-        const anchor = typeof chapterId === "string" && chapterId.length > 0
-            ? (doc) => doc.getElementById(chapterId) ?? 0
-            : () => 0;
+        let anchor;
+        if (typeof indexInSection === "number" && indexInSection >= 0) {
+            anchor = (doc) => {
+                const list = doc.querySelectorAll(CHAPTER_SELECTOR);
+                return list[indexInSection] ?? 0;
+            };
+        } else if (typeof chapterId === "string" && chapterId.length > 0) {
+            anchor = (doc) => doc.getElementById(chapterId) ?? 0;
+        } else {
+            anchor = () => 0;
+        }
         Promise.resolve(renderer.goTo({ index: idx, anchor })).catch((e) => {
             console.warn("[reader-init] goToChapter failed", e);
         });
