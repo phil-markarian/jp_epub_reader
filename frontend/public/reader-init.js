@@ -284,64 +284,45 @@ const computeLiveChapterFlatIndex = (view) => {
     const flat = window.__JP_READER?.getChapterList?.() || [];
     if (!flat.length) return null;
 
-    // Strategy: project the viewport's leading edge from screen
-    // coordinates back into iframe-internal coordinates, then walk
-    // chapter elements (whose BCRs are iframe-internal) and pick
-    // the latest one whose entry edge is at or behind the leading
-    // edge in reading direction.
-    //
-    // - vertical-rl: reading flows right→left. New chapters enter
-    //   from the LEFT side of the viewport (smaller screen-x).
-    //   Project rendererBcr.left into iframe coords:
-    //     iframeLeadingX = rendererBcr.left - iframeBcr.left
-    //   A chapter is "reached" when its iframe-internal r.right
-    //   (its entry edge, since vertical-rl content's right-edge is
-    //   the FIRST point read) is >= iframeLeadingX. (Earlier
-    //   chapters have larger r.right; later chapters have smaller.)
-    //
-    // - vertical-lr / horizontal-tb scrolled / horizontal paginated:
-    //   analogous, with sign / axis flipped per writing mode.
-    //
-    // We don't need renderer.viewSize / start / end here. iframe
-    // BCR (in parent coords) + chapter BCR (in iframe coords) +
-    // renderer BCR (the visible viewport's screen position) is all
-    // the math needs, and all three are public reads.
-    const win = doc.defaultView;
-    const iframeEl = win?.frameElement;
+    // Foliate scrolls an outer #container in the paginator's CLOSED
+    // shadow DOM, so renderer.shadowRoot is null from outside — but
+    // we can still reach the iframe element via doc.defaultView's
+    // frameElement back-reference, which crosses the shadow boundary
+    // because the iframe lives in its own window context. Element
+    // BCRs from inside the iframe are iframe-internal (never move
+    // under scroll); combining them with the iframe element's
+    // parent-screen BCR (which DOES shift as the outer container
+    // scrolls) gives us each chapter's true on-screen position.
+    const iframeEl = doc.defaultView?.frameElement || null;
     if (!iframeEl) return null;
     const iframeBcr = iframeEl.getBoundingClientRect();
-    const rendererBcr = renderer.getBoundingClientRect();
+    // The paginator host element fills the visible viewport (its
+    // BCR equals the closed #container's BCR), so we use it as the
+    // visible-region reference frame.
+    const containerBcr = renderer.getBoundingClientRect();
 
-    const cs = win?.getComputedStyle?.(doc.documentElement);
+    const cs = doc.defaultView?.getComputedStyle?.(doc.documentElement);
     const wm = (cs?.writingMode || "horizontal-tb").toLowerCase();
     const isVerticalRL = wm.startsWith("vertical-rl");
     const isVerticalLR = wm.startsWith("vertical-lr");
 
-    // Project the viewport's leading edge from parent-screen coords
-    // into iframe-internal coords (since chapter BCRs read inside
-    // the iframe are in iframe-internal coords).
-    const iframeLeadingX = rendererBcr.left - iframeBcr.left;
-    const iframeTrailingX = rendererBcr.right - iframeBcr.left;
-    const iframeLeadingY = rendererBcr.top - iframeBcr.top;
-
+    // "Has this chapter heading's leading edge crossed the visible
+    // region's leading edge in screen coordinates?"
+    // - vertical-rl: text flows right→left, so a chapter is entered
+    //   when its screen-right edge has reached or passed the
+    //   container's right edge.
+    // - vertical-lr: opposite, entered when its left passes the
+    //   container's left.
+    // - horizontal-tb: entered when its top has passed the container
+    //   top (scrolled) or left (paginated ltr).
     const passed = (el) => {
         const r = el.getBoundingClientRect();
-        if (isVerticalRL) {
-            // Entry edge for a chapter in vertical-rl is its right
-            // edge (rightmost x = first read). It's been entered
-            // once that edge is at or right-of the viewport's
-            // leading edge in iframe coords.
-            return r.right >= iframeLeadingX;
-        }
-        if (isVerticalLR) {
-            // vertical-lr: entry edge is the left, viewport's
-            // leading edge is its right edge (trailing in LTR
-            // screen, but leading for content flow).
-            return r.left <= iframeTrailingX;
-        }
-        // horizontal-tb: entry edge is the top. Leading edge is
-        // viewport top.
-        return r.top <= iframeLeadingY;
+        const screenLeft = iframeBcr.left + r.left;
+        const screenRight = iframeBcr.left + r.right;
+        const screenTop = iframeBcr.top + r.top;
+        if (isVerticalRL) return screenRight <= containerBcr.right + 1;
+        if (isVerticalLR) return screenLeft <= containerBcr.left + 1;
+        return screenTop <= containerBcr.top + 1;
     };
 
     const docNodes = doc.querySelectorAll(CHAPTER_SELECTOR);
@@ -350,37 +331,6 @@ const computeLiveChapterFlatIndex = (view) => {
         if (passed(docNodes[i])) posInSection = i;
         else break;
     }
-    // ---- TEMP DEBUG: throttled to ~1/sec
-    const now = Date.now();
-    if (!window.__JP_READER._chDbgT || now - window.__JP_READER._chDbgT > 1000) {
-        window.__JP_READER._chDbgT = now;
-        const first = docNodes[0];
-        const mid = docNodes[Math.floor(docNodes.length / 2)];
-        const last = docNodes[docNodes.length - 1];
-        const dump = (el) => el && {
-            text: el.textContent?.trim().slice(0, 8),
-            l: Math.round(el.getBoundingClientRect().left),
-            r: Math.round(el.getBoundingClientRect().right),
-            t: Math.round(el.getBoundingClientRect().top),
-        };
-        console.log("[chapter-tracker]", {
-            section: sectionIndex,
-            wm,
-            iframeL: Math.round(iframeBcr.left),
-            iframeR: Math.round(iframeBcr.right),
-            iframeW: Math.round(iframeBcr.width),
-            rendererL: Math.round(rendererBcr.left),
-            rendererR: Math.round(rendererBcr.right),
-            iframeLeadingX: Math.round(iframeLeadingX),
-            iframeTrailingX: Math.round(iframeTrailingX),
-            docNodesLen: docNodes.length,
-            first: dump(first),
-            mid: dump(mid),
-            last: dump(last),
-            posInSection,
-        });
-    }
-    // ---- /TEMP DEBUG
 
     // No chapter element in the current section has been entered —
     // we're either above the first chap1/chap2 in this section, or
