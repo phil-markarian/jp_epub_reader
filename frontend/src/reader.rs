@@ -344,16 +344,14 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                 if let Some(f) = f {
                     set_book_fraction.set(Some(f));
                 }
-                // Keep the chapter drawer's highlighted row in sync
-                // even while it's already open.
-                let cur_raw = jp_get_current_chapter_index();
-                if let Some(idx) = cur_raw.as_f64() {
-                    if idx.is_finite() && idx >= 0.0 {
-                        set_current_chapter_idx.set(Some(idx as usize));
-                        return;
-                    }
-                }
-                set_current_chapter_idx.set(None);
+                // Chapter highlight is owned exclusively by the live
+                // tracker callback below. Foliate's relocate-derived
+                // chapter (via range.startContainer) trails by one
+                // because the visible range's start sits in the
+                // previous chapter's body when a new heading is in
+                // the viewport — letting both paths write here
+                // produced a flicker back to the stale value on
+                // every 250 ms debounced relocate.
             }) as Box<dyn FnMut(JsValue)>);
             let relocate_js: JsValue = relocate_cb.as_ref().clone();
             // Leak so the listener keeps firing for the window's
@@ -457,16 +455,11 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
         if let Ok(list) = serde_wasm_bindgen::from_value::<Vec<ChapterEntry>>(raw) {
             set_chapters.set(list);
         }
-        // Same call surface — refresh "what chapter am I on" too, so
-        // the drawer marks the current row when it opens.
-        let cur_raw = jp_get_current_chapter_index();
-        if let Some(idx) = cur_raw.as_f64() {
-            if idx.is_finite() && idx >= 0.0 {
-                set_current_chapter_idx.set(Some(idx as usize));
-            }
-        } else {
-            set_current_chapter_idx.set(None);
-        }
+        // The current chapter index is owned by the live tracker
+        // callback wired below — its signal is already up-to-date,
+        // so we don't re-read jp_get_current_chapter_index() here
+        // (that path lags by one chapter when a heading sits
+        // mid-viewport).
     };
 
     let on_toggle_chapters = move |_| {
