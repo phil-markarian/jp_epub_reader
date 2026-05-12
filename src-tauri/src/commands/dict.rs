@@ -11,7 +11,7 @@ use jp_dict::{peek_index, Dictionary, ImportSummary};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter, State};
+use tauri::State;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -28,14 +28,6 @@ pub enum ImportOutcome {
         path: String,
         error: String,
     },
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ImportProgress<'a> {
-    current: usize,
-    total: usize,
-    path: &'a str,
-    status: &'a str,
 }
 
 /// Lightweight per-zip preview returned by `scan_dictionary_folder`.
@@ -126,62 +118,31 @@ fn preview_zip(zip_path: &Path, existing: &HashSet<String>) -> DictPreview {
     }
 }
 
+/// Import a single Yomitan zip and return its outcome. The frontend
+/// drives the batch — calling this once per selected path — which
+/// gives the JS event loop a chance to repaint between zips so the
+/// UI never appears to hang. Replaces the previous batch command.
 #[tauri::command]
-pub fn import_dictionary_files(
-    paths: Vec<String>,
-    app: AppHandle,
+pub fn import_single_dictionary(
+    path: String,
     state: State<'_, AppState>,
-) -> Result<Vec<ImportOutcome>, String> {
-    let total = paths.len();
-    let mut outcomes = Vec::with_capacity(total);
-
-    for (i, p) in paths.iter().enumerate() {
-        let display = p.clone();
-        let _ = app.emit(
-            "dictionary-import-progress",
-            ImportProgress {
-                current: i + 1,
-                total,
-                path: &display,
-                status: "starting",
-            },
-        );
-
-        let zip_path = PathBuf::from(p);
-        let outcome = match state.dict_db.import_zip(&zip_path) {
-            Ok(Some(summary)) => ImportOutcome::Imported {
-                path: display.clone(),
-                summary,
-            },
-            Ok(None) => ImportOutcome::Skipped {
-                path: display.clone(),
-                reason: "already imported".into(),
-            },
-            Err(e) => ImportOutcome::Failed {
-                path: display.clone(),
-                error: e.to_string(),
-            },
-        };
-
-        let status = match &outcome {
-            ImportOutcome::Imported { .. } => "imported",
-            ImportOutcome::Skipped { .. } => "skipped",
-            ImportOutcome::Failed { .. } => "failed",
-        };
-        let _ = app.emit(
-            "dictionary-import-progress",
-            ImportProgress {
-                current: i + 1,
-                total,
-                path: &display,
-                status,
-            },
-        );
-
-        outcomes.push(outcome);
-    }
-
-    Ok(outcomes)
+) -> Result<ImportOutcome, String> {
+    let zip_path = PathBuf::from(&path);
+    let outcome = match state.dict_db.import_zip(&zip_path) {
+        Ok(Some(summary)) => ImportOutcome::Imported {
+            path: path.clone(),
+            summary,
+        },
+        Ok(None) => ImportOutcome::Skipped {
+            path: path.clone(),
+            reason: "already imported".into(),
+        },
+        Err(e) => ImportOutcome::Failed {
+            path: path.clone(),
+            error: e.to_string(),
+        },
+    };
+    Ok(outcome)
 }
 
 #[tauri::command]

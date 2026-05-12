@@ -49,7 +49,7 @@ pub fn run() {
             commands::bookmark::update_bookmark_note,
             commands::bookmark::delete_bookmark,
             commands::dict::scan_dictionary_folder,
-            commands::dict::import_dictionary_files,
+            commands::dict::import_single_dictionary,
             commands::dict::list_dictionaries,
             commands::dict::delete_dictionary,
         ])

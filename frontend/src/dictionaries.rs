@@ -1,14 +1,16 @@
 //! Phase 5 subpiece 1 — "Dictionaries" section in the main window.
 //!
 //! Two-step import flow:
-//!   1. User picks a folder. We scan it recursively, read each zip's
-//!      index.json, and present a checklist of dictionaries found
-//!      (with status badges for already-imported / unsupported /
-//!      broken).
-//!   2. User unchecks anything they don't want, hits "Import
-//!      selected"; we kick off the actual term-bank import only for
-//!      the chosen subset. Progress events stream in via the
-//!      `dictionary-import-progress` event.
+//!   1. User picks a folder → recursive scan reads each zip's
+//!      `index.json` and builds a checklist of preview rows.
+//!   2. User selects which dictionaries to import → frontend loops
+//!      through the chosen subset, invoking the backend's
+//!      `import_single_dictionary` command ONE ZIP AT A TIME. Each
+//!      `await` yields the JS event loop so the queue table redraws
+//!      between imports and the UI never appears frozen.
+//!
+//! The queue table uses per-row `ArcRwSignal<QueueStatus>` so
+//! flipping one row's status doesn't re-render the other 146 rows.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -19,9 +21,6 @@ use wasm_bindgen::prelude::*;
 extern "C" {
     #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "core"], catch)]
     async fn invoke(cmd: &str, args: JsValue) -> Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "event"], catch)]
-    async fn listen(event: &str, handler: &Closure<dyn FnMut(JsValue)>) -> Result<JsValue, JsValue>;
 
     #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "dialog"], catch)]
     async fn open(options: JsValue) -> Result<JsValue, JsValue>;
@@ -45,9 +44,6 @@ struct Dictionary {
 struct DictPreview {
     path: String,
     name: Option<String>,
-    // revision and error come back from the backend but we don't
-    // surface them in the current UI; keep the fields decoded but
-    // unread so future polish can pick them up without a wire change.
     #[serde(default)]
     #[allow(dead_code)]
     revision: Option<String>,
@@ -58,12 +54,46 @@ struct DictPreview {
     error: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-struct ProgressEvent {
-    current: usize,
-    total: usize,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueueStatus {
+    Queued,
+    Running,
+    Imported,
+    Skipped,
+    Failed,
+}
+
+impl QueueStatus {
+    fn css_class(&self) -> &'static str {
+        match self {
+            Self::Queued => "queue-queued",
+            Self::Running => "queue-running",
+            Self::Imported => "queue-imported",
+            Self::Skipped => "queue-skipped",
+            Self::Failed => "queue-failed",
+        }
+    }
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Queued => "Queued",
+            Self::Running => "Importing…",
+            Self::Imported => "Imported",
+            Self::Skipped => "Skipped",
+            Self::Failed => "Failed",
+        }
+    }
+}
+
+/// One row of the import queue. The status is its own signal so the
+/// table doesn't re-render every row when one row's status flips —
+/// fine-grained reactivity is what keeps the UI responsive when the
+/// queue contains 100+ entries.
+#[derive(Clone)]
+struct QueueRow {
+    index: usize,
     path: String,
-    status: String,
+    name: String,
+    status: ArcRwSignal<QueueStatus>,
 }
 
 fn stringify_err(v: JsValue) -> String {
@@ -80,41 +110,19 @@ fn basename(path: &str) -> String {
         .to_string()
 }
 
-/// Per-zip status displayed in the import queue while a batch runs.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum QueueStatus {
-    Queued,
-    Running,
-    Imported,
-    Skipped,
-    Failed,
-}
-
-// The previous list-style queue table is gone — the new UI is a
-// single progress bar + counts — but we still need the discriminants
-// for tallying counts and identifying the running entry.
-
 #[component]
 pub fn DictionariesPanel() -> impl IntoView {
     let (dicts, set_dicts) = signal::<Vec<Dictionary>>(Vec::new());
     let (preview, set_preview) = signal::<Vec<DictPreview>>(Vec::new());
-    // Set of paths the user has selected from the preview list.
     let (selected, set_selected) = signal::<std::collections::HashSet<String>>(
         std::collections::HashSet::new(),
     );
-    // Visual queue: maps each selected path to its current import
-    // status during/after a batch run. Empty between batches.
-    let (queue, set_queue) =
-        signal::<std::collections::BTreeMap<String, QueueStatus>>(
-            std::collections::BTreeMap::new(),
-        );
-    // Ordered list of paths in the queue (BTreeMap above sorts
-    // lexicographically; we want insertion order to match the user's
-    // selection / backend processing order).
-    let (queue_order, set_queue_order) = signal::<Vec<String>>(Vec::new());
+    let (queue_rows, set_queue_rows) = signal::<Vec<QueueRow>>(Vec::new());
+    let (counts, set_counts) = signal::<(usize, usize, usize, usize)>((0, 0, 0, 0));
+    // (imported, skipped, failed, done) — derived from row signal
+    // updates inside the import loop.
     let (busy, set_busy) = signal::<bool>(false);
     let (scanning, set_scanning) = signal::<bool>(false);
-    let (progress, set_progress) = signal::<Option<String>>(None);
     let (banner, set_banner) = signal::<Option<String>>(None);
 
     let refresh = move || {
@@ -131,39 +139,6 @@ pub fn DictionariesPanel() -> impl IntoView {
     };
 
     refresh();
-
-    Effect::new(move |_| {
-        let cb = Closure::wrap(Box::new(move |e: JsValue| {
-            let payload =
-                js_sys::Reflect::get(&e, &JsValue::from_str("payload")).unwrap_or(JsValue::NULL);
-            if let Ok(p) = serde_wasm_bindgen::from_value::<ProgressEvent>(payload) {
-                set_progress.set(Some(format!(
-                    "[{}/{}] {} — {}",
-                    p.current,
-                    p.total,
-                    p.status,
-                    basename(&p.path),
-                )));
-                // Update the visual queue for this path.
-                let next_status = match p.status.as_str() {
-                    "starting" => Some(QueueStatus::Running),
-                    "imported" => Some(QueueStatus::Imported),
-                    "skipped" => Some(QueueStatus::Skipped),
-                    "failed" => Some(QueueStatus::Failed),
-                    _ => None,
-                };
-                if let Some(ns) = next_status {
-                    set_queue.update(|q| {
-                        q.insert(p.path.clone(), ns);
-                    });
-                }
-            }
-        }) as Box<dyn FnMut(JsValue)>);
-        spawn_local(async move {
-            let _ = listen("dictionary-import-progress", &cb).await;
-            cb.forget();
-        });
-    });
 
     let on_choose_folder = move |_| {
         set_scanning.set(true);
@@ -200,9 +175,6 @@ pub fn DictionariesPanel() -> impl IntoView {
             match invoke("scan_dictionary_folder", args.into()).await {
                 Ok(v) => match serde_wasm_bindgen::from_value::<Vec<DictPreview>>(v) {
                     Ok(rows) => {
-                        // Pre-select every Ready entry; leave the
-                        // rest unchecked so accidental Imports don't
-                        // try to re-process broken / unsupported zips.
                         let mut sel = std::collections::HashSet::new();
                         for r in &rows {
                             if r.status == "ready" {
@@ -221,81 +193,93 @@ pub fn DictionariesPanel() -> impl IntoView {
     };
 
     let on_import_selected = move |_| {
-        // Preserve the user's selection order by walking the preview
-        // rows instead of iterating the HashSet (which is unordered).
         let sel_set = selected.get();
-        let chosen: Vec<String> = preview
+        let chosen: Vec<DictPreview> = preview
             .get()
-            .iter()
+            .into_iter()
             .filter(|r| sel_set.contains(&r.path))
-            .map(|r| r.path.clone())
             .collect();
         if chosen.is_empty() {
             set_banner.set(Some("Nothing selected.".into()));
             return;
         }
+        // Build a queue row per chosen entry, each with its own
+        // status signal. The Vec itself never mutates after this
+        // point — only individual row signals flip — so the table
+        // re-renders are O(1) per zip.
+        let rows: Vec<QueueRow> = chosen
+            .iter()
+            .enumerate()
+            .map(|(i, p)| QueueRow {
+                index: i + 1,
+                path: p.path.clone(),
+                name: p
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| basename(&p.path)),
+                status: ArcRwSignal::new(QueueStatus::Queued),
+            })
+            .collect();
+        let total = rows.len();
+        set_queue_rows.set(rows.clone());
+        set_counts.set((0, 0, 0, 0));
         set_busy.set(true);
         set_banner.set(None);
-        set_progress.set(Some(format!("Queued {} dictionaries…", chosen.len())));
-        // Seed the queue with every selected path in Queued state so
-        // the UI shows the upcoming work before the first event lands.
-        let mut q = std::collections::BTreeMap::new();
-        for p in &chosen {
-            q.insert(p.clone(), QueueStatus::Queued);
-        }
-        set_queue.set(q);
-        set_queue_order.set(chosen.clone());
+
         spawn_local(async move {
-            let args = js_sys::Object::new();
-            let arr = js_sys::Array::new();
-            for p in &chosen {
-                arr.push(&JsValue::from_str(p));
-            }
-            let _ = js_sys::Reflect::set(&args, &JsValue::from_str("paths"), &arr);
-            match invoke("import_dictionary_files", args.into()).await {
-                Ok(v) => {
-                    let arr = js_sys::Array::from(&v);
-                    let total = arr.length() as usize;
-                    let mut imported = 0usize;
-                    let mut skipped = 0usize;
-                    let mut failed = 0usize;
-                    for i in 0..arr.length() {
-                        let entry = arr.get(i);
-                        let kind = js_sys::Reflect::get(&entry, &JsValue::from_str("kind"))
+            let mut imported = 0usize;
+            let mut skipped = 0usize;
+            let mut failed = 0usize;
+            for row in rows {
+                row.status.set(QueueStatus::Running);
+                // Let the browser paint the Running state before
+                // we block on the IPC. rAF + microtask flush.
+                yield_to_browser().await;
+
+                let args = js_sys::Object::new();
+                let _ = js_sys::Reflect::set(
+                    &args,
+                    &JsValue::from_str("path"),
+                    &JsValue::from_str(&row.path),
+                );
+                let res = invoke("import_single_dictionary", args.into()).await;
+                let next = match res {
+                    Ok(v) => {
+                        let kind = js_sys::Reflect::get(&v, &JsValue::from_str("kind"))
                             .ok()
-                            .and_then(|v| v.as_string())
+                            .and_then(|x| x.as_string())
                             .unwrap_or_default();
                         match kind.as_str() {
-                            "imported" => imported += 1,
-                            "skipped" => skipped += 1,
-                            "failed" => failed += 1,
-                            _ => {}
+                            "imported" => {
+                                imported += 1;
+                                QueueStatus::Imported
+                            }
+                            "skipped" => {
+                                skipped += 1;
+                                QueueStatus::Skipped
+                            }
+                            _ => {
+                                failed += 1;
+                                QueueStatus::Failed
+                            }
                         }
                     }
-                    set_banner.set(Some(format!(
-                        "{total} processed: {imported} imported, {skipped} skipped, {failed} failed."
-                    )));
-                    set_progress.set(None);
-                    // Drop the scan preview + selection now that the
-                    // installed list reflects the new state; keep the
-                    // final queue table visible so the user can see
-                    // per-zip results.
-                    set_preview.set(Vec::new());
-                    set_selected.set(std::collections::HashSet::new());
-                    refresh();
-                }
-                Err(e) => {
-                    set_banner.set(Some(format!("import: {}", stringify_err(e))));
-                    set_progress.set(None);
-                }
+                    Err(_) => {
+                        failed += 1;
+                        QueueStatus::Failed
+                    }
+                };
+                row.status.set(next);
+                set_counts.set((imported, skipped, failed, imported + skipped + failed));
             }
+            set_banner.set(Some(format!(
+                "{total} processed: {imported} imported, {skipped} skipped, {failed} failed.",
+            )));
             set_busy.set(false);
+            set_preview.set(Vec::new());
+            set_selected.set(std::collections::HashSet::new());
+            refresh();
         });
-    };
-
-    let clear_queue = move |_| {
-        set_queue.set(std::collections::BTreeMap::new());
-        set_queue_order.set(Vec::new());
     };
 
     let toggle_all = move |checked: bool| {
@@ -312,6 +296,11 @@ pub fn DictionariesPanel() -> impl IntoView {
         }
     };
 
+    let clear_queue = move |_| {
+        set_queue_rows.set(Vec::new());
+        set_counts.set((0, 0, 0, 0));
+    };
+
     view! {
         <section class="dictionaries">
             <details open>
@@ -324,196 +313,187 @@ pub fn DictionariesPanel() -> impl IntoView {
                     >
                         {move || if scanning.get() { "Scanning…" } else { "Choose folder…" }}
                     </button>
-                    {move || progress.get().map(|p| view! { <span class="muted">{p}</span> })}
                 </div>
                 {move || banner.get().map(|b| view! { <div class="banner">{b}</div> })}
 
+                // Live import queue.
                 {move || {
-                    let order = queue_order.get();
-                    if order.is_empty() {
+                    let rows = queue_rows.get();
+                    if rows.is_empty() {
                         return view! { <span></span> }.into_any();
                     }
-                    let map = queue.get();
-                    let total = order.len();
-                    let mut running_path = None::<String>;
-                    let mut imported = 0usize;
-                    let mut skipped = 0usize;
-                    let mut failed = 0usize;
-                    for path in &order {
-                        match map.get(path).cloned().unwrap_or(QueueStatus::Queued) {
-                            QueueStatus::Queued => {}
-                            QueueStatus::Running => running_path = Some(path.clone()),
-                            QueueStatus::Imported => imported += 1,
-                            QueueStatus::Skipped => skipped += 1,
-                            QueueStatus::Failed => failed += 1,
-                        }
-                    }
-                    let done = imported + skipped + failed;
+                    let total = rows.len();
+                    let (imp, skp, fld, done) = counts.get();
                     let pct = if total > 0 {
                         (done as f64 / total as f64 * 100.0) as i32
-                    } else {
-                        0
-                    };
-                    // Resolve the running dict's display name from the
-                    // most recent preview scan (one-shot HashMap lookup).
-                    let running_label = running_path.as_ref().map(|p| {
-                        preview
-                            .get()
-                            .into_iter()
-                            .find(|r| &r.path == p)
-                            .and_then(|r| r.name)
-                            .unwrap_or_else(|| basename(p))
-                    });
+                    } else { 0 };
                     view! {
                         <div class="dict-queue">
                             <div class="row">
-                                <strong>"Import progress"</strong>
+                                <strong>"Import queue"</strong>
                                 <span class="muted">
                                     {format!("{done} / {total}")}
+                                </span>
+                                <span class="muted">
+                                    {format!(
+                                        "{imp} imported • {skp} skipped • {fld} failed"
+                                    )}
                                 </span>
                                 {(!busy.get()).then(|| view! {
                                     <button type="button" on:click=clear_queue>"Clear"</button>
                                 })}
                             </div>
-                            <div class="dict-progress-bar" role="progressbar"
-                                aria-valuenow=pct
-                                aria-valuemin="0" aria-valuemax="100">
-                                <div
-                                    class="dict-progress-fill"
-                                    style=format!("width: {pct}%")
-                                ></div>
+                            <div class="dict-progress-bar">
+                                <div class="dict-progress-fill"
+                                    style=format!("width: {pct}%")></div>
                             </div>
-                            <div class="dict-progress-current">
-                                {match running_label {
-                                    Some(name) => view! {
-                                        <span class="queue-status queue-running">"Importing"</span>
-                                        " "
-                                        <strong>{name}</strong>
-                                    }.into_any(),
-                                    None if busy.get() => view! {
-                                        <span class="muted">"Waiting for next dictionary…"</span>
-                                    }.into_any(),
-                                    None => view! {
-                                        <span class="muted">"Done."</span>
-                                    }.into_any(),
-                                }}
-                            </div>
-                            <div class="dict-progress-counts muted">
-                                {format!(
-                                    "Imported {imported} • Skipped {skipped} • Failed {failed}"
-                                )}
-                            </div>
+                            <table class="dict-table dict-queue-table">
+                                <thead>
+                                    <tr>
+                                        <th>"#"</th>
+                                        <th>"Name"</th>
+                                        <th>"Status"</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {rows.into_iter().map(|row| {
+                                        let idx = row.index;
+                                        let name = row.name.clone();
+                                        let status = row.status.clone();
+                                        view! {
+                                            <tr class="queue-row">
+                                                <td class="muted">{idx}</td>
+                                                <td>{name}</td>
+                                                <td>
+                                                    {
+                                                        let s = status.clone();
+                                                        move || {
+                                                            let st = s.get();
+                                                            view! {
+                                                                <span class=format!("queue-status {}", st.css_class())>
+                                                                    {st.label()}
+                                                                </span>
+                                                            }
+                                                        }
+                                                    }
+                                                </td>
+                                            </tr>
+                                        }
+                                    }).collect_view()}
+                                </tbody>
+                            </table>
                         </div>
                     }.into_any()
                 }}
 
+                // Scan preview / checklist.
                 {move || {
                     let rows = preview.get();
                     if rows.is_empty() {
-                        view! { <span></span> }.into_any()
-                    } else {
-                        let total_ready = rows.iter().filter(|r| r.status == "ready").count();
-                        view! {
-                            <div class="dict-preview">
-                                <div class="row">
-                                    <button
-                                        type="button"
-                                        on:click=move |_| toggle_all(true)
-                                    >
-                                        "Select all ready"
-                                    </button>
-                                    <button
-                                        type="button"
-                                        on:click=move |_| toggle_all(false)
-                                    >
-                                        "Clear selection"
-                                    </button>
-                                    <button
-                                        type="button"
-                                        on:click=on_import_selected
-                                        prop:disabled=move || busy.get() || selected.get().is_empty()
-                                    >
-                                        {move || {
-                                            let n = selected.get().len();
-                                            if busy.get() {
-                                                "Importing…".to_string()
-                                            } else {
-                                                format!("Import selected ({n})")
-                                            }
-                                        }}
-                                    </button>
-                                    <span class="muted">
-                                        {format!("{} zip(s) found, {total_ready} ready", rows.len())}
-                                    </span>
-                                </div>
-                                <table class="dict-table">
-                                    <thead>
-                                        <tr>
-                                            <th></th>
-                                            <th>"Name"</th>
-                                            <th>"Status"</th>
-                                            <th>"Format"</th>
-                                            <th>"Path"</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {rows.into_iter().map(|r| {
-                                            let path_for_check = r.path.clone();
-                                            let path_for_label = r.path.clone();
-                                            let ready = r.status == "ready";
-                                            let name_or_basename = r.name
-                                                .clone()
-                                                .unwrap_or_else(|| basename(&r.path));
-                                            let status_label = match r.status.as_str() {
-                                                "ready" => "Ready",
-                                                "already-imported" => "Already imported",
-                                                "unsupported-format" => "Unsupported format",
-                                                "broken" => "Broken",
-                                                other => other,
-                                            }.to_string();
-                                            let fmt = r.format_version
-                                                .map(|f| format!("v{f}"))
-                                                .unwrap_or_default();
-                                            let on_check = move |ev: leptos::ev::Event| {
-                                                let checked = leptos::prelude::event_target_checked(&ev);
-                                                set_selected.update(|s| {
-                                                    if checked {
-                                                        s.insert(path_for_check.clone());
-                                                    } else {
-                                                        s.remove(&path_for_check);
-                                                    }
-                                                });
-                                            };
-                                            let is_checked = {
-                                                let p = r.path.clone();
-                                                move || selected.get().contains(&p)
-                                            };
-                                            view! {
-                                                <tr>
-                                                    <td>
-                                                        <input
-                                                            type="checkbox"
-                                                            prop:disabled=!ready
-                                                            prop:checked=is_checked
-                                                            on:change=on_check
-                                                        />
-                                                    </td>
-                                                    <td>{name_or_basename}</td>
-                                                    <td class=move || format!("dict-status dict-status-{}", r.status)>
-                                                        {status_label}
-                                                    </td>
-                                                    <td class="muted">{fmt}</td>
-                                                    <td class="muted dict-path">{basename(&path_for_label)}</td>
-                                                </tr>
-                                            }
-                                        }).collect_view()}
-                                    </tbody>
-                                </table>
-                            </div>
-                        }.into_any()
+                        return view! { <span></span> }.into_any();
                     }
+                    let total_ready = rows.iter().filter(|r| r.status == "ready").count();
+                    view! {
+                        <div class="dict-preview">
+                            <div class="row">
+                                <button
+                                    type="button"
+                                    on:click=move |_| toggle_all(true)
+                                >
+                                    "Select all ready"
+                                </button>
+                                <button
+                                    type="button"
+                                    on:click=move |_| toggle_all(false)
+                                >
+                                    "Clear selection"
+                                </button>
+                                <button
+                                    type="button"
+                                    on:click=on_import_selected
+                                    prop:disabled=move || busy.get() || selected.get().is_empty()
+                                >
+                                    {move || {
+                                        let n = selected.get().len();
+                                        if busy.get() {
+                                            "Importing…".to_string()
+                                        } else {
+                                            format!("Import selected ({n})")
+                                        }
+                                    }}
+                                </button>
+                                <span class="muted">
+                                    {format!("{} zip(s) found, {total_ready} ready", rows.len())}
+                                </span>
+                            </div>
+                            <table class="dict-table">
+                                <thead>
+                                    <tr>
+                                        <th></th>
+                                        <th>"Name"</th>
+                                        <th>"Status"</th>
+                                        <th>"Format"</th>
+                                        <th>"Path"</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {rows.into_iter().map(|r| {
+                                        let path_for_check = r.path.clone();
+                                        let path_for_label = r.path.clone();
+                                        let ready = r.status == "ready";
+                                        let name_or_basename = r.name
+                                            .clone()
+                                            .unwrap_or_else(|| basename(&r.path));
+                                        let status_label = match r.status.as_str() {
+                                            "ready" => "Ready",
+                                            "already-imported" => "Already imported",
+                                            "unsupported-format" => "Unsupported format",
+                                            "broken" => "Broken",
+                                            other => other,
+                                        }.to_string();
+                                        let fmt = r.format_version
+                                            .map(|f| format!("v{f}"))
+                                            .unwrap_or_default();
+                                        let on_check = move |ev: leptos::ev::Event| {
+                                            let checked = leptos::prelude::event_target_checked(&ev);
+                                            set_selected.update(|s| {
+                                                if checked {
+                                                    s.insert(path_for_check.clone());
+                                                } else {
+                                                    s.remove(&path_for_check);
+                                                }
+                                            });
+                                        };
+                                        let is_checked = {
+                                            let p = r.path.clone();
+                                            move || selected.get().contains(&p)
+                                        };
+                                        view! {
+                                            <tr>
+                                                <td>
+                                                    <input
+                                                        type="checkbox"
+                                                        prop:disabled=!ready
+                                                        prop:checked=is_checked
+                                                        on:change=on_check
+                                                    />
+                                                </td>
+                                                <td>{name_or_basename}</td>
+                                                <td class=move || format!("dict-status dict-status-{}", r.status)>
+                                                    {status_label}
+                                                </td>
+                                                <td class="muted">{fmt}</td>
+                                                <td class="muted dict-path">{basename(&path_for_label)}</td>
+                                            </tr>
+                                        }
+                                    }).collect_view()}
+                                </tbody>
+                            </table>
+                        </div>
+                    }.into_any()
                 }}
 
+                // Installed list.
                 {move || {
                     let rows = dicts.get();
                     if rows.is_empty() {
@@ -576,4 +556,22 @@ pub fn DictionariesPanel() -> impl IntoView {
             </details>
         </section>
     }
+}
+
+/// Yield to the browser long enough for it to paint the latest signal
+/// updates. Two animation frames + a microtask is the rough lower
+/// bound that reliably flushes a CSS class change in WKWebView.
+async fn yield_to_browser() {
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        let win = web_sys::window().expect("no window");
+        let resolve_cb = Closure::once_into_js(move || {
+            let win2 = web_sys::window().expect("no window");
+            let resolve2 = Closure::once_into_js(move || {
+                let _ = resolve.call0(&JsValue::NULL);
+            });
+            let _ = win2.request_animation_frame(resolve2.as_ref().unchecked_ref());
+        });
+        let _ = win.request_animation_frame(resolve_cb.as_ref().unchecked_ref());
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
 }
