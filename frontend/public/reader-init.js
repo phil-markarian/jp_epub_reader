@@ -284,21 +284,22 @@ const computeLiveChapterFlatIndex = (view) => {
     const flat = window.__JP_READER?.getChapterList?.() || [];
     if (!flat.length) return null;
 
-    // Foliate scrolls the outer #container in the paginator's shadow
-    // DOM, NOT the iframe itself — the iframe stays put while the
-    // outer container slides over it. So element.getBoundingClientRect()
-    // from inside the iframe returns iframe-internal coords that
-    // never change as the user scrolls. We have to combine the
-    // iframe's PARENT-screen BCR (which does shift with outer scroll)
-    // with each chapter's iframe-internal BCR to recover its true
-    // visible position.
-    const shadow = renderer.shadowRoot;
-    const containerEl = shadow?.getElementById?.("container");
-    const iframeEl = containerEl?.querySelector?.("iframe")
-        ?? shadow?.querySelector?.("iframe");
-    if (!iframeEl || !containerEl) return null;
+    // Foliate scrolls an outer #container in the paginator's CLOSED
+    // shadow DOM, so renderer.shadowRoot is null from outside — but
+    // we can still reach the iframe element via doc.defaultView's
+    // frameElement back-reference, which crosses the shadow boundary
+    // because the iframe lives in its own window context. Element
+    // BCRs from inside the iframe are iframe-internal (never move
+    // under scroll); combining them with the iframe element's
+    // parent-screen BCR (which DOES shift as the outer container
+    // scrolls) gives us each chapter's true on-screen position.
+    const iframeEl = doc.defaultView?.frameElement || null;
+    if (!iframeEl) return null;
     const iframeBcr = iframeEl.getBoundingClientRect();
-    const containerBcr = containerEl.getBoundingClientRect();
+    // The paginator host element fills the visible viewport (its
+    // BCR equals the closed #container's BCR), so we use it as the
+    // visible-region reference frame.
+    const containerBcr = renderer.getBoundingClientRect();
 
     const cs = doc.defaultView?.getComputedStyle?.(doc.documentElement);
     const wm = (cs?.writingMode || "horizontal-tb").toLowerCase();
