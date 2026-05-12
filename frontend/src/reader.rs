@@ -951,26 +951,59 @@ fn ChapterDrawer(
     on_close: impl Fn(leptos::ev::MouseEvent) + 'static,
 ) -> impl IntoView {
     let list_ref: NodeRef<leptos::html::Ul> = NodeRef::new();
+    let indicator_ref: NodeRef<leptos::html::Div> = NodeRef::new();
+    // First Effect run positions the indicator without animation; we
+    // defer arming the CSS transition by one frame so subsequent
+    // updates animate. StoredValue so the flag survives across the
+    // Effect's reactive re-runs without being a tracked dependency.
+    let armed = StoredValue::new(false);
 
-    // Scroll the highlighted row into view whenever the current
-    // chapter or the row list changes (covers both "drawer opens
-    // mid-book" and "user paginates while drawer is open").
+    // Position the sliding highlight + scroll the current row into
+    // view whenever the current chapter or the row list changes.
     Effect::new(move |_| {
         let _ = chapters.get();
-        let Some(idx) = current_idx.get() else { return };
         let Some(ul) = list_ref.get() else { return };
-        // .chapter-row.chapter-current is what we tag below.
-        if let Ok(Some(el)) = ul.query_selector(".chapter-row.chapter-current") {
-            if let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() {
-                let opts = web_sys::ScrollIntoViewOptions::new();
-                opts.set_behavior(web_sys::ScrollBehavior::Smooth);
-                opts.set_block(web_sys::ScrollLogicalPosition::Center);
-                html_el.scroll_into_view_with_scroll_into_view_options(&opts);
+        let Some(indicator) = indicator_ref.get() else { return };
+        let indicator_el: web_sys::HtmlElement = (*indicator).clone().into();
+        let Some(idx) = current_idx.get() else {
+            // No current chapter — hide the indicator.
+            let _ = indicator_el.style().set_property("opacity", "0");
+            return;
+        };
+        let row_el = ul
+            .query_selector(&format!(".chapter-row[data-idx=\"{idx}\"]"))
+            .ok()
+            .flatten();
+        let Some(row_el) = row_el else { return };
+        let Ok(row_html) = row_el.dyn_into::<web_sys::HtmlElement>() else { return };
+        let top = row_html.offset_top();
+        let height = row_html.offset_height();
+        let style = indicator_el.style();
+        let _ = style.set_property(
+            "transform",
+            &format!("translateY({top}px)"),
+        );
+        let _ = style.set_property("height", &format!("{height}px"));
+        let _ = style.set_property("opacity", "1");
+
+        // Auto-scroll the current row into view.
+        let opts = web_sys::ScrollIntoViewOptions::new();
+        opts.set_behavior(web_sys::ScrollBehavior::Smooth);
+        opts.set_block(web_sys::ScrollLogicalPosition::Center);
+        row_html.scroll_into_view_with_scroll_into_view_options(&opts);
+
+        // Arm the CSS transition after the first paint so the very
+        // first positioning doesn't slide from (0, 0).
+        if !armed.get_value() {
+            armed.set_value(true);
+            let target = indicator_el.clone();
+            let cb = wasm_bindgen::closure::Closure::once_into_js(move || {
+                let _ = target.set_attribute("data-armed", "true");
+            });
+            if let Some(win) = web_sys::window() {
+                let _ = win.request_animation_frame(cb.as_ref().unchecked_ref());
             }
         }
-        // No-op suppression for unused `idx` in some builds — its
-        // presence is what gates the scroll call above.
-        let _ = idx;
     });
 
     view! {
@@ -993,6 +1026,7 @@ fn ChapterDrawer(
                     let current = current_idx.get();
                     view! {
                         <ul class="chapter-list" node_ref=list_ref>
+                            <div class="chapter-highlight" node_ref=indicator_ref></div>
                             {rows.into_iter().enumerate().map(|(i, c)| {
                                 let level = c.level.clamp(1, 3);
                                 let section_index = c.section_index;
@@ -1000,8 +1034,8 @@ fn ChapterDrawer(
                                 let label = c.label.clone();
                                 let index_in_section = c.index_in_section;
                                 let is_current = current == Some(i);
-                                let class = if is_current {
-                                    format!("chapter-row chapter-level-{level} chapter-current")
+                                let row_class = if is_current {
+                                    format!("chapter-row chapter-level-{level} is-current")
                                 } else {
                                     format!("chapter-row chapter-level-{level}")
                                 };
@@ -1017,7 +1051,7 @@ fn ChapterDrawer(
                                     jp_go_to_chapter(section_index, id_js, idx_js);
                                 };
                                 view! {
-                                    <li class=class>
+                                    <li class=row_class data-idx=i>
                                         <button
                                             type="button"
                                             class="chapter-jump"
