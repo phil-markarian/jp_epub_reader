@@ -97,6 +97,10 @@ struct CurrentLocation {
     section_index: Option<u32>,
     fraction: Option<f64>,
     chapter: Option<String>,
+    #[serde(rename = "chapterIndex")]
+    chapter_index: Option<u32>,
+    #[serde(rename = "chapterTotal")]
+    chapter_total: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -107,6 +111,10 @@ struct Bookmark {
     section_index: Option<u32>,
     fraction: Option<f64>,
     chapter: Option<String>,
+    #[serde(default)]
+    chapter_index: Option<u32>,
+    #[serde(default)]
+    chapter_total: Option<u32>,
     note: String,
     created_at: i64,
     updated_at: i64,
@@ -120,6 +128,8 @@ struct AddBookmarkArgs {
     section_index: Option<u32>,
     fraction: Option<f64>,
     chapter: Option<String>,
+    chapter_index: Option<u32>,
+    chapter_total: Option<u32>,
     note: Option<String>,
 }
 
@@ -485,6 +495,8 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                 section_index: loc.section_index,
                 fraction: loc.fraction,
                 chapter: loc.chapter,
+                chapter_index: loc.chapter_index,
+                chapter_total: loc.chapter_total,
                 note: None,
             };
             match invoke_typed::<_, Bookmark>("add_bookmark", &args).await {
@@ -1029,15 +1041,20 @@ fn BookmarkRow(
     } else {
         "Unknown chapter".into()
     };
-    // "Chapter X of Y" — computed live from the cached chapter list
-    // against the bookmark's section index. Returns null when the
-    // book has no inline chapter markers.
-    let position_text: Option<String> = bookmark.section_index.and_then(|idx| {
-        let raw = jp_get_chapter_position(idx);
-        serde_wasm_bindgen::from_value::<ChapterPosition>(raw)
-            .ok()
-            .map(|p| format!("Chapter {} of {}", p.current, p.total))
-    });
+    // "Chapter X of Y". Prefer the precise flat chapter index stored
+    // at bookmark creation; fall back to the section-derived estimate
+    // for older bookmarks that don't have it.
+    let position_text: Option<String> = match (bookmark.chapter_index, bookmark.chapter_total) {
+        (Some(i), Some(total)) if total > 0 => {
+            Some(format!("Chapter {} of {}", i + 1, total))
+        }
+        _ => bookmark.section_index.and_then(|idx| {
+            let raw = jp_get_chapter_position(idx);
+            serde_wasm_bindgen::from_value::<ChapterPosition>(raw)
+                .ok()
+                .map(|p| format!("Chapter {} of {}", p.current, p.total))
+        }),
+    };
     let fraction = bookmark.fraction.unwrap_or(0.0);
     let progress_label = format!("{:.0}%", (fraction * 100.0).clamp(0.0, 100.0));
     let cfi = bookmark.cfi.clone();

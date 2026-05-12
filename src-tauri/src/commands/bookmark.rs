@@ -21,6 +21,8 @@ pub fn add_bookmark(
     section_index: Option<u32>,
     fraction: Option<f64>,
     chapter: Option<String>,
+    chapter_index: Option<u32>,
+    chapter_total: Option<u32>,
     note: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Bookmark, String> {
@@ -30,6 +32,8 @@ pub fn add_bookmark(
         section_index,
         fraction,
         chapter,
+        chapter_index,
+        chapter_total,
         note: note.unwrap_or_default(),
     };
     state.db.add_bookmark(&bm, now_seconds()).map_err(|e| e.to_string())

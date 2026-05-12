@@ -83,8 +83,10 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/001_initial.sql"),
     // v2 — Phase 3: bookmarks
     include_str!("migrations/002_bookmarks.sql"),
-    // v3 — Phase 4: vocab + encounter + source (added later)
-    // include_str!("migrations/003_vocab.sql"),
+    // v3 — Phase 3: bookmark chapter_index + chapter_total
+    include_str!("migrations/003_bookmark_chapter_index.sql"),
+    // v4 — Phase 4: vocab + encounter + source (added later)
+    // include_str!("migrations/004_vocab.sql"),
 ];
 
 #[cfg(test)]

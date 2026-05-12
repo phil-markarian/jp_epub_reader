@@ -15,6 +15,13 @@ pub struct Bookmark {
     pub section_index: Option<u32>,
     pub fraction: Option<f64>,
     pub chapter: Option<String>,
+    /// 0-based flat index of the chapter the user was inside when the
+    /// bookmark was captured, against the chapter cache in
+    /// reader-init.js. Used by the drawer to render "Chapter X of Y"
+    /// precisely.
+    pub chapter_index: Option<u32>,
+    /// Total chapter count in the book at capture time.
+    pub chapter_total: Option<u32>,
     pub note: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -27,6 +34,8 @@ pub struct NewBookmark {
     pub section_index: Option<u32>,
     pub fraction: Option<f64>,
     pub chapter: Option<String>,
+    pub chapter_index: Option<u32>,
+    pub chapter_total: Option<u32>,
     pub note: String,
 }
 
@@ -35,14 +44,17 @@ impl Db {
         self.with_conn(|c| {
             c.execute(
                 "INSERT INTO bookmark
-                    (work_id, cfi, section_index, fraction, chapter, note, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (work_id, cfi, section_index, fraction, chapter,
+                     chapter_index, chapter_total, note, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     bm.work_id,
                     bm.cfi,
                     bm.section_index,
                     bm.fraction,
                     bm.chapter,
+                    bm.chapter_index,
+                    bm.chapter_total,
                     bm.note,
                     now,
                     now,
@@ -57,6 +69,8 @@ impl Db {
                 section_index: bm.section_index,
                 fraction: bm.fraction,
                 chapter: bm.chapter.clone(),
+                chapter_index: bm.chapter_index,
+                chapter_total: bm.chapter_total,
                 note: bm.note.clone(),
                 created_at: now,
                 updated_at: now,
@@ -68,7 +82,8 @@ impl Db {
         self.with_conn(|c| {
             let mut stmt = c
                 .prepare(
-                    "SELECT id, work_id, cfi, section_index, fraction, chapter, note,
+                    "SELECT id, work_id, cfi, section_index, fraction, chapter,
+                            chapter_index, chapter_total, note,
                             created_at, updated_at
                      FROM bookmark
                      WHERE work_id = ?
@@ -120,9 +135,11 @@ fn row_to_bookmark(row: &Row<'_>) -> rusqlite::Result<Bookmark> {
         section_index: row.get(3)?,
         fraction: row.get(4)?,
         chapter: row.get(5)?,
-        note: row.get(6)?,
-        created_at: row.get(7)?,
-        updated_at: row.get(8)?,
+        chapter_index: row.get(6)?,
+        chapter_total: row.get(7)?,
+        note: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
     })
 }
 
@@ -152,6 +169,8 @@ mod tests {
             section_index: Some(3),
             fraction: Some(0.42),
             chapter: Some("先生と私".into()),
+            chapter_index: Some(40),
+            chapter_total: Some(113),
             note: "interesting passage".into(),
         }
     }

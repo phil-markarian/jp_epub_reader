@@ -208,33 +208,30 @@ const tocWalkLabel = (view, currentIndex) => {
 /**
  * Best-effort chapter label for the user's current location.
  *
- *   1. `detail.tocItem.label` if present (Foliate's own resolver).
- *   2. Inline-markup cache for the current section, indexed against
- *      `detail.range`. If the range is missing or in a different
- *      document, fall back to section-defaults.
- *   3. `book.toc` href-resolution walk by section index.
+ * Strategy: build a {chap1, chap2, chap3} triple from the inline
+ * cache (which has the finer chap2/chap3 detail) and let Foliate's
+ * tocItem override chap1 when present — TOC labels tend to be
+ * cleaner ("下 先生と遺書") than the inline div the converter emits.
+ * Falls back to tocItem alone, then to the book.toc href walk.
  */
 const inferChapterLabel = (view, detail) => {
-    const fromDetail = detail?.tocItem?.label;
-    if (typeof fromDetail === "string" && fromDetail.trim().length > 0) {
-        return fromDetail.trim();
-    }
+    const tocLabel = typeof detail?.tocItem?.label === "string"
+        ? detail.tocItem.label.trim()
+        : "";
     const currentIndex = detail?.section?.current;
     const map = window.__JP_READER?._chaptersBySection;
+
     if (map instanceof Map && typeof currentIndex === "number") {
         const list = map.get(currentIndex) || [];
         const range = detail?.range;
         const doc = range?.startContainer?.ownerDocument ?? null;
         let parts = list.length ? findChaptersAtOrBefore(list, doc, range) : null;
-        // If we couldn't compare against the range (no range, or
-        // section content not currently in this doc), or the current
-        // section had no chap1 in the at-or-before window, fall back
-        // to defaults that walk earlier sections for chap1.
+        // When the range walk yielded no chap1 (e.g. range missing or
+        // current section has no chap1 marker), fall through to the
+        // section defaults so we still get a part label.
         if (!parts || parts.chap1 == null) {
             const defaults = sectionChapterDefaults(currentIndex);
             if (defaults) {
-                // Merge: keep finer chap2/chap3 from range walk if
-                // present, but inherit chap1 from defaults.
                 if (parts) {
                     parts = {
                         chap1: parts.chap1 ?? defaults.chap1,
@@ -247,10 +244,22 @@ const inferChapterLabel = (view, detail) => {
                 }
             }
         }
-        const composed = composeChapterLabel(parts);
+        const composed = composeChapterLabelWithToc(parts, tocLabel);
         if (composed) return composed;
     }
+
+    if (tocLabel) return tocLabel;
     return tocWalkLabel(view, currentIndex);
+};
+
+const composeChapterLabelWithToc = (parts, tocLabel) => {
+    const chap1Label = (parts?.chap1 && parts.chap1.label) || tocLabel || null;
+    const chap2Label = parts?.chap2?.label || null;
+    const chap3Label = parts?.chap3?.label || null;
+    const pieces = [chap1Label, chap2Label, chap3Label].filter(
+        (s) => typeof s === "string" && s.length > 0,
+    );
+    return pieces.length ? pieces.join(" · ") : null;
 };
 
 const savedLocationFromRelocate = (detail) => {
@@ -871,6 +880,8 @@ window.__JP_READER = {
         const detail = window.__JP_READER._lastRelocateDetail;
         if (!detail) return null;
         const view = window.__JP_READER._lastView;
+        const flat = this.getChapterList();
+        const chapterIdx = this.getCurrentChapterIndex();
         return {
             cfi: typeof detail.cfi === "string" ? detail.cfi : null,
             // Foliate's view-level relocate spreads SectionProgress
@@ -881,6 +892,8 @@ window.__JP_READER = {
                 : null,
             fraction: typeof detail.fraction === "number" ? detail.fraction : null,
             chapter: inferChapterLabel(view, detail),
+            chapterIndex: typeof chapterIdx === "number" ? chapterIdx : null,
+            chapterTotal: flat.length || null,
         };
     },
 
