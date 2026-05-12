@@ -725,6 +725,25 @@ window.__JP_READER = {
     },
 
     /**
+     * For the bookmarks drawer: "Chapter X of Y" where X is the
+     * 1-based position of the latest chapter at or before the given
+     * section index, and Y is the total chapter count. Returns null
+     * when the cache is empty.
+     */
+    getChapterPosition(sectionIndex) {
+        const list = window.__JP_READER.getChapterList();
+        if (!list.length) return null;
+        const target = typeof sectionIndex === "number" ? sectionIndex : 0;
+        let best = -1;
+        for (let i = 0; i < list.length; i++) {
+            if (list[i].sectionIndex <= target) best = i;
+            else break;
+        }
+        if (best < 0) return null;
+        return { current: best + 1, total: list.length };
+    },
+
+    /**
      * Jump the reader to a specific chapter heading. AozoraEpub3 doesn't
      * give chap divs DOM ids, so we navigate by chapter index within
      * the section — querySelectorAll on the rendered iframe doc

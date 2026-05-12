@@ -63,6 +63,15 @@ extern "C" {
         chapter_id: JsValue,
         index_in_section: JsValue,
     );
+
+    #[wasm_bindgen(js_namespace = ["window", "__JP_READER"], js_name = "getChapterPosition")]
+    fn jp_get_chapter_position(section_index: u32) -> JsValue;
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ChapterPosition {
+    current: u32,
+    total: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -417,6 +426,9 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
         let next = !bookmarks_open.get_untracked();
         set_bookmarks_open.set(next);
         if next {
+            // Drawers share the right-side screen real estate; only one
+            // at a time.
+            set_chapters_open.set(false);
             refresh_bookmarks();
         }
     };
@@ -436,6 +448,7 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
             };
             match invoke_typed::<_, Bookmark>("add_bookmark", &args).await {
                 Ok(_) => {
+                    set_chapters_open.set(false);
                     set_bookmarks_open.set(true);
                     refresh_bookmarks();
                 }
@@ -919,6 +932,15 @@ fn BookmarkRow(
     } else {
         "Unknown chapter".into()
     };
+    // "Chapter X of Y" — computed live from the cached chapter list
+    // against the bookmark's section index. Returns null when the
+    // book has no inline chapter markers.
+    let position_text: Option<String> = bookmark.section_index.and_then(|idx| {
+        let raw = jp_get_chapter_position(idx);
+        serde_wasm_bindgen::from_value::<ChapterPosition>(raw)
+            .ok()
+            .map(|p| format!("Chapter {} of {}", p.current, p.total))
+    });
     let fraction = bookmark.fraction.unwrap_or(0.0);
     let progress_label = format!("{:.0}%", (fraction * 100.0).clamp(0.0, 100.0));
     let cfi = bookmark.cfi.clone();
@@ -975,6 +997,7 @@ fn BookmarkRow(
             <div class="bookmark-row-head">
                 <button type="button" class="bookmark-jump" on:click=on_go title="Jump to bookmark">
                     <span class="bookmark-chapter">{chapter_for_display}</span>
+                    {position_text.map(|t| view! { <span class="muted bookmark-position">{t}</span> })}
                     <span class="muted bookmark-progress">{progress_label}</span>
                 </button>
                 <button

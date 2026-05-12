@@ -577,6 +577,10 @@ html, body { height: 100%; }
 .bookmark-progress {
   font-size: 0.78em;
 }
+.bookmark-position {
+  font-size: 0.82em;
+  letter-spacing: 0.01em;
+}
 .bookmark-delete {
   border: 1px solid rgba(127, 127, 127, 0.35);
   background: transparent;
