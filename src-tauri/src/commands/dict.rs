@@ -275,8 +275,8 @@ pub async fn move_dictionary_zips(
 
 fn move_one_zip(src: &Path, target_dir: &Path) -> MoveOutcome {
     let from_display = src.to_string_lossy().to_string();
-    let file_name = match src.file_name().map(|s| s.to_owned()) {
-        Some(n) => n,
+    let file_name = match src.file_name().and_then(|s| s.to_str()) {
+        Some(n) => n.to_string(),
         None => {
             return MoveOutcome::Failed {
                 from: from_display,
@@ -285,19 +285,34 @@ fn move_one_zip(src: &Path, target_dir: &Path) -> MoveOutcome {
         }
     };
 
-    // Pick a non-colliding destination by adding ".N" before the
-    // .zip suffix until one is free.
+    // Pick a non-colliding destination by appending ".N" before
+    // the ".zip" suffix. The previous implementation used
+    // `Path::with_extension("zip")` after pushing `.N` onto the
+    // stem, but that REPLACES `.N` with `.zip` so every iteration
+    // produced the same path → infinite loop when the original
+    // name was already in target_dir.
     let mut dest = target_dir.join(&file_name);
     if dest.exists() {
-        let stem = src.file_stem().map(|s| s.to_owned()).unwrap_or(file_name);
-        for n in 1u32.. {
-            let mut candidate = stem.clone();
-            candidate.push(format!(".{n}"));
-            let with_ext = target_dir.join(&candidate).with_extension("zip");
-            if !with_ext.exists() {
-                dest = with_ext;
+        let stem = src
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(String::from)
+            .unwrap_or_else(|| file_name.clone());
+        let mut found = false;
+        for n in 1u32..=10000 {
+            let candidate = format!("{stem}.{n}.zip");
+            let p = target_dir.join(&candidate);
+            if !p.exists() {
+                dest = p;
+                found = true;
                 break;
             }
+        }
+        if !found {
+            return MoveOutcome::Failed {
+                from: from_display,
+                error: "could not find a free destination filename".into(),
+            };
         }
     }
 
