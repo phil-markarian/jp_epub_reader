@@ -812,22 +812,35 @@ const LOOKUP_MAX_SCAN_LEN = 16;
 const LOOKUP_THROTTLE_MS = 80;
 
 const attachLookupHover = (doc) => {
-    if (!doc || doc.__jpLookupAttached) return;
-    doc.__jpLookupAttached = true;
-    let last = 0;
-    doc.addEventListener("mousemove", (ev) => {
-        if (!ev.shiftKey) return;
-        const now = Date.now();
-        if (now - last < LOOKUP_THROTTLE_MS) return;
-        last = now;
-        triggerLookupAt(doc, ev.clientX, ev.clientY);
-    });
-    // Also fire on Shift-click so users on trackpads that suppress
-    // mousemove until click can still trigger explicitly.
-    doc.addEventListener("click", (ev) => {
-        if (!ev.shiftKey) return;
-        triggerLookupAt(doc, ev.clientX, ev.clientY);
-    });
+    try {
+        if (!doc || doc.__jpLookupAttached) return;
+        doc.__jpLookupAttached = true;
+        let last = 0;
+        doc.addEventListener("mousemove", (ev) => {
+            if (!ev.shiftKey) return;
+            const now = Date.now();
+            if (now - last < LOOKUP_THROTTLE_MS) return;
+            last = now;
+            safeTriggerLookup(doc, ev.clientX, ev.clientY);
+        });
+        // Also fire on Shift-click for trackpads that suppress
+        // mousemove until click.
+        doc.addEventListener("click", (ev) => {
+            if (!ev.shiftKey) return;
+            safeTriggerLookup(doc, ev.clientX, ev.clientY);
+        });
+        console.log("[lookup] hover attached on iframe doc");
+    } catch (e) {
+        console.warn("[lookup] attachLookupHover failed", e);
+    }
+};
+
+const safeTriggerLookup = (doc, x, y) => {
+    try {
+        triggerLookupAt(doc, x, y);
+    } catch (e) {
+        console.warn("[lookup] triggerLookupAt threw", e);
+    }
 };
 
 const triggerLookupAt = (doc, x, y) => {

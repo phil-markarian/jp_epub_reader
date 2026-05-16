@@ -1288,9 +1288,13 @@ fn LookupPopup() -> impl IntoView {
     let (pos, set_pos) = signal::<(f64, f64)>((0.0, 0.0));
     let (visible, set_visible) = signal::<bool>(false);
 
+    web_sys::console::log_1(&"[lookup-popup] mounted".into());
+
     // Poll the globals at ~30Hz. Cheap and avoids needing a custom
     // pub/sub bridge between JS and wasm — both sides just touch
-    // window globals.
+    // window globals. We wrap the whole tick in a JsValue-safe
+    // closure so any stray Reflect failure logs instead of crashing
+    // the reader.
     Effect::new(move |_| {
         let cb = Closure::wrap(Box::new(move || {
             let window = match web_sys::window() {
