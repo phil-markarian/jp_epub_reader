@@ -513,9 +513,11 @@ pub fn DictionariesPanel() -> impl IntoView {
                     if rows.is_empty() {
                         return view! { <span></span> }.into_any();
                     }
+                    let total = rows.len();
                     let total_ready = rows.iter().filter(|r| r.status == "ready").count();
                     view! {
                         <div class="dict-preview">
+                            <h3>{format!("To be installed ({total_ready} of {total} ready)")}</h3>
                             <div class="row">
                                 <button
                                     type="button"
@@ -543,11 +545,9 @@ pub fn DictionariesPanel() -> impl IntoView {
                                         }
                                     }}
                                 </button>
-                                <span class="muted">
-                                    {format!("{} zip(s) found, {total_ready} ready", rows.len())}
-                                </span>
                             </div>
-                            <table class="dict-table">
+                            <div class="dict-installed-scroll">
+                            <table class="dict-table dict-installed-table">
                                 <thead>
                                     <tr>
                                         <th></th>
@@ -610,6 +610,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                     }).collect_view()}
                                 </tbody>
                             </table>
+                            </div>
                         </div>
                     }.into_any()
                 }}
