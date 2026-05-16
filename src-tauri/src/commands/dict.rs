@@ -13,6 +13,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
+const SETTING_DICT_LAST_FOLDER: &str = "dict.last_folder";
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ImportOutcome {
@@ -68,6 +70,11 @@ pub fn scan_dictionary_folder(
         return Err(format!("not a directory: {path}"));
     }
 
+    // Remember this folder so the next app launch can auto-rescan
+    // and show what's already imported. Best-effort; we don't fail
+    // the scan if settings write fails.
+    let _ = state.settings.set(SETTING_DICT_LAST_FOLDER, &path);
+
     // Snapshot existing dictionary names once so the per-zip preview
     // can flag duplicates without a DB query per file.
     let existing: HashSet<String> = state
@@ -84,6 +91,25 @@ pub fn scan_dictionary_folder(
         out.push(preview_zip(zip_path, &existing));
     }
     Ok(out)
+}
+
+/// Returns the folder path the user last scanned (or imported from),
+/// or None if they've never picked one. The frontend calls this on
+/// mount so it can auto-rescan and surface "already imported"
+/// statuses without making the user re-pick the folder each session.
+#[tauri::command]
+pub fn get_dict_last_folder(state: State<'_, AppState>) -> Option<String> {
+    state.settings.get_string(SETTING_DICT_LAST_FOLDER)
+}
+
+/// Clear the saved dict folder. Useful if the folder gets renamed /
+/// deleted and the auto-rescan keeps erroring.
+#[tauri::command]
+pub fn clear_dict_last_folder(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .settings
+        .unset(SETTING_DICT_LAST_FOLDER)
+        .map_err(|e| e.to_string())
 }
 
 fn preview_zip(zip_path: &Path, existing: &HashSet<String>) -> DictPreview {

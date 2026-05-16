@@ -189,6 +189,22 @@ details[open] > summary::before { transform: rotate(90deg); }
 }
 .dict-table th { font-weight: 600; }
 .dict-table tbody tr:hover { background: rgba(127, 127, 127, 0.06); }
+
+/* Installed-dictionaries list — capped at ~10 visible rows then scrolls.
+ * Sticky header so column labels stay visible while scrolling. */
+.dict-installed-scroll {
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid rgba(127, 127, 127, 0.2);
+  border-radius: 6px;
+}
+.dict-installed-table { margin: 0; }
+.dict-installed-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--reader-bg, #fff);
+  z-index: 1;
+}
 .dict-preview { margin: 12px 0; }
 .dict-path {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

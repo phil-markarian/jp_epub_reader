@@ -145,40 +145,21 @@ pub fn DictionariesPanel() -> impl IntoView {
         });
     };
 
-    refresh();
-
-    let on_choose_folder = move |_| {
+    // Run a scan against a given folder path, populating the preview
+    // list. Extracted from on_choose_folder so we can call it both
+    // from the dialog handler and from the mount-time auto-rescan.
+    let run_scan = move |path: String| {
         set_scanning.set(true);
         set_banner.set(None);
         set_preview.set(Vec::new());
         set_selected.set(std::collections::HashSet::new());
         spawn_local(async move {
-            let opts = js_sys::Object::new();
-            let _ = js_sys::Reflect::set(
-                &opts,
-                &JsValue::from_str("directory"),
-                &JsValue::from_bool(true),
-            );
-            let _ = js_sys::Reflect::set(
-                &opts,
-                &JsValue::from_str("multiple"),
-                &JsValue::from_bool(false),
-            );
-            let picked = match open(opts.into()).await {
-                Ok(v) => v,
-                Err(e) => {
-                    set_banner.set(Some(format!("dialog: {}", stringify_err(e))));
-                    set_scanning.set(false);
-                    return;
-                }
-            };
-            let Some(path) = picked.as_string() else {
-                set_scanning.set(false);
-                return;
-            };
-
             let args = js_sys::Object::new();
-            let _ = js_sys::Reflect::set(&args, &JsValue::from_str("path"), &JsValue::from_str(&path));
+            let _ = js_sys::Reflect::set(
+                &args,
+                &JsValue::from_str("path"),
+                &JsValue::from_str(&path),
+            );
             match invoke("scan_dictionary_folder", args.into()).await {
                 Ok(v) => match serde_wasm_bindgen::from_value::<Vec<DictPreview>>(v) {
                     Ok(rows) => {
@@ -196,6 +177,49 @@ pub fn DictionariesPanel() -> impl IntoView {
                 Err(e) => set_banner.set(Some(format!("scan: {}", stringify_err(e)))),
             }
             set_scanning.set(false);
+        });
+    };
+
+    refresh();
+
+    // On mount: if the user previously picked a folder, rescan it so
+    // the panel comes up showing the same checklist (with up-to-date
+    // "already imported" badges) instead of requiring a fresh
+    // folder-pick every session.
+    spawn_local(async move {
+        if let Ok(v) = invoke("get_dict_last_folder", JsValue::from_str("{}")).await {
+            if let Some(path) = v.as_string() {
+                if !path.is_empty() {
+                    run_scan(path);
+                }
+            }
+        }
+    });
+
+    let on_choose_folder = move |_| {
+        spawn_local(async move {
+            let opts = js_sys::Object::new();
+            let _ = js_sys::Reflect::set(
+                &opts,
+                &JsValue::from_str("directory"),
+                &JsValue::from_bool(true),
+            );
+            let _ = js_sys::Reflect::set(
+                &opts,
+                &JsValue::from_str("multiple"),
+                &JsValue::from_bool(false),
+            );
+            let picked = match open(opts.into()).await {
+                Ok(v) => v,
+                Err(e) => {
+                    set_banner.set(Some(format!("dialog: {}", stringify_err(e))));
+                    return;
+                }
+            };
+            let Some(path) = picked.as_string() else {
+                return; // User cancelled.
+            };
+            run_scan(path);
         });
     };
 
@@ -329,9 +353,19 @@ pub fn DictionariesPanel() -> impl IntoView {
             };
             set_banner.set(Some(summary));
             set_busy.set(false);
-            set_preview.set(Vec::new());
             set_selected.set(std::collections::HashSet::new());
             refresh();
+            // Re-scan the saved folder (if any) so newly-imported
+            // dicts flip to "Already imported" in the checklist
+            // instead of disappearing. Falls through silently if no
+            // folder was saved.
+            if let Ok(v) = invoke("get_dict_last_folder", JsValue::from_str("{}")).await {
+                if let Some(path) = v.as_string() {
+                    if !path.is_empty() {
+                        run_scan(path);
+                    }
+                }
+            }
         });
     };
 
@@ -588,9 +622,11 @@ pub fn DictionariesPanel() -> impl IntoView {
                             <p class="muted">"No dictionaries imported yet. Click \"Choose folder…\" to pick a directory of Yomitan .zip files."</p>
                         }.into_any()
                     } else {
+                        let count = rows.len();
                         view! {
-                            <h3>"Installed"</h3>
-                            <table class="dict-table">
+                            <h3>{format!("Installed ({count})")}</h3>
+                            <div class="dict-installed-scroll">
+                            <table class="dict-table dict-installed-table">
                                 <thead>
                                     <tr>
                                         <th>"Name"</th>
@@ -637,6 +673,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                     }).collect_view()}
                                 </tbody>
                             </table>
+                            </div>
                         }.into_any()
                     }
                 }}
