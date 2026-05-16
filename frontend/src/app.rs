@@ -313,7 +313,15 @@ pub fn App() -> impl IntoView {
             <SourcesPanel status=status set_banner=set_banner refresh_status=refresh_status />
             <ImporterStatusLine importer=importer />
 
-            {move || banner.get().map(|b| view! { <div class="banner">{b}</div> })}
+            <crate::dictionaries::DictionariesPanel />
+            <LibraryPanel
+                library=library
+                refresh_library=refresh_library
+                page=lib_page
+                set_page=set_lib_page
+                page_size=LIBRARY_PAGE_SIZE
+                node_ref=library_section
+            />
 
             <section class="search">
                 <details open>
@@ -341,18 +349,12 @@ pub fn App() -> impl IntoView {
                         />
                         "Public domain only"
                     </label>
+                    // Status banner — moved inside Index since most
+                    // messages it carries are refresh / search related.
+                    {move || banner.get().map(|b| view! { <div class="banner">{b}</div> })}
                 </details>
             </section>
 
-            <crate::dictionaries::DictionariesPanel />
-            <LibraryPanel
-                library=library
-                refresh_library=refresh_library
-                page=lib_page
-                set_page=set_lib_page
-                page_size=LIBRARY_PAGE_SIZE
-                node_ref=library_section
-            />
             <ResultsList
                 results=results
                 refresh_library=refresh_library
