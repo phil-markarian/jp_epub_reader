@@ -654,6 +654,8 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
     };
 
     view! {
+        <>
+        <LookupPopup />
         <main class="reader-shell">
             <div class="reader-titlebar" data-tauri-drag-region="true">
                 {move || entry.get().map(|e| {
@@ -719,7 +721,6 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                             aria-label="Next page"
                         >"›"</button>
                     })}
-                    <LookupPopup />
                 </div>
 
                 {move || {
@@ -810,6 +811,7 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                 }
             </div>
         </main>
+        </>
     }
 }
 
