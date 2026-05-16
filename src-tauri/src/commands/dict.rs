@@ -348,6 +348,32 @@ pub fn delete_dictionary(
     state.dict_db.delete_dictionary(id).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn set_dictionary_enabled(
+    id: i64,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .dict_db
+        .set_dictionary_enabled(id, enabled)
+        .map_err(|e| e.to_string())
+}
+
+/// `ordered_ids[0]` becomes the highest-priority dictionary; the
+/// last one becomes the lowest. Driven by the up/down arrows + the
+/// (future) drag-drop reorder in the installed-dicts table.
+#[tauri::command]
+pub fn reorder_dictionaries(
+    ordered_ids: Vec<i64>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .dict_db
+        .reorder_dictionaries(&ordered_ids)
+        .map_err(|e| e.to_string())
+}
+
 /// Recursively walk `root` and collect every `.zip` file at any depth.
 /// Handles flat folders (drop a bunch of zips in one place), the shoui
 /// collection's category layout (`root/Bilingual/*.zip`), and

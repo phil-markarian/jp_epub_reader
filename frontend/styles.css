@@ -203,6 +203,31 @@ details[open] > summary::before { transform: rotate(90deg); }
   border-radius: 6px;
 }
 .dict-installed-table { margin: 0; }
+
+/* Installed-list controls: enable toggle + reorder arrows */
+.dict-priority-hint { font-size: 0.85em; margin: 4px 0 6px 0; }
+.dict-row-disabled td:nth-child(3) { opacity: 0.45; text-decoration: line-through; }
+.dict-reorder {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 22px;
+}
+.dict-arrow {
+  font-size: 0.7em;
+  padding: 0 4px;
+  line-height: 1.1;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  border-radius: 3px;
+  color: inherit;
+}
+.dict-arrow:hover:not(:disabled) {
+  background: rgba(127, 127, 127, 0.12);
+}
+.dict-arrow:disabled { opacity: 0.25; cursor: default; }
+
 .dict-installed-table thead th {
   position: sticky;
   top: 0;

@@ -973,29 +973,59 @@ pub fn DictionariesPanel() -> impl IntoView {
                         }.into_any()
                     } else {
                         let count = rows.len();
+                        let last_idx = count.saturating_sub(1);
+                        // Snapshot ids in display order; the reorder
+                        // command takes the full list with the moved
+                        // row swapped to its new neighbor.
+                        let ordered_ids: Vec<i64> = rows.iter().map(|d| d.id).collect();
                         view! {
                             <h3>{format!("Installed ({count})")}</h3>
+                            <p class="muted dict-priority-hint">
+                                "Higher in the list = higher priority in the lookup popup. "
+                                "Toggle the checkbox to disable a dictionary without deleting it."
+                            </p>
                             <div class="dict-installed-scroll">
                             <table class="dict-table dict-installed-table">
                                 <thead>
                                     <tr>
+                                        <th>"On"</th>
+                                        <th>""</th>
                                         <th>"Name"</th>
-                                        <th>"Format"</th>
-                                        <th>"Revision"</th>
                                         <th>"Terms"</th>
-                                        <th></th>
+                                        <th>""</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {rows.into_iter().map(|d| {
+                                    {rows.into_iter().enumerate().map(|(i, d)| {
                                         let id = d.id;
                                         let name = d.name.clone();
-                                        let rev = d.revision.clone().unwrap_or_default();
-                                        let fmt = d.format_version;
                                         let tc = d.term_count;
+                                        let enabled = d.enabled;
                                         let refresh = refresh;
-                                        let on_delete = move |_| {
+                                        let ids_for_up = ordered_ids.clone();
+                                        let ids_for_down = ordered_ids.clone();
+                                        let on_delete = {
                                             let n = name.clone();
+                                            move |_| {
+                                                let n = n.clone();
+                                                spawn_local(async move {
+                                                    let args = js_sys::Object::new();
+                                                    let _ = js_sys::Reflect::set(
+                                                        &args,
+                                                        &JsValue::from_str("id"),
+                                                        &JsValue::from_f64(id as f64),
+                                                    );
+                                                    match invoke("delete_dictionary", args.into()).await {
+                                                        Ok(_) => refresh(),
+                                                        Err(e) => web_sys::console::warn_1(
+                                                            &format!("delete {n}: {}", stringify_err(e)).into(),
+                                                        ),
+                                                    }
+                                                });
+                                            }
+                                        };
+                                        let on_toggle = move |ev: leptos::ev::Event| {
+                                            let checked = leptos::prelude::event_target_checked(&ev);
                                             spawn_local(async move {
                                                 let args = js_sys::Object::new();
                                                 let _ = js_sys::Reflect::set(
@@ -1003,19 +1033,67 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                     &JsValue::from_str("id"),
                                                     &JsValue::from_f64(id as f64),
                                                 );
-                                                match invoke("delete_dictionary", args.into()).await {
-                                                    Ok(_) => refresh(),
-                                                    Err(e) => web_sys::console::warn_1(
-                                                        &format!("delete {n}: {}", stringify_err(e)).into(),
-                                                    ),
+                                                let _ = js_sys::Reflect::set(
+                                                    &args,
+                                                    &JsValue::from_str("enabled"),
+                                                    &JsValue::from_bool(checked),
+                                                );
+                                                if let Err(e) =
+                                                    invoke("set_dictionary_enabled", args.into()).await
+                                                {
+                                                    web_sys::console::warn_1(
+                                                        &format!("set enabled: {}", stringify_err(e)).into(),
+                                                    );
                                                 }
+                                                refresh();
                                             });
                                         };
+                                        let on_move_up = move |_| {
+                                            if i == 0 { return; }
+                                            let mut next = ids_for_up.clone();
+                                            next.swap(i, i - 1);
+                                            spawn_local(async move {
+                                                send_reorder(next).await;
+                                                refresh();
+                                            });
+                                        };
+                                        let on_move_down = move |_| {
+                                            if i >= last_idx { return; }
+                                            let mut next = ids_for_down.clone();
+                                            next.swap(i, i + 1);
+                                            spawn_local(async move {
+                                                send_reorder(next).await;
+                                                refresh();
+                                            });
+                                        };
+                                        let up_disabled = i == 0;
+                                        let down_disabled = i >= last_idx;
                                         view! {
-                                            <tr>
+                                            <tr class=if enabled { "" } else { "dict-row-disabled" }>
+                                                <td>
+                                                    <input
+                                                        type="checkbox"
+                                                        prop:checked=enabled
+                                                        on:change=on_toggle
+                                                    />
+                                                </td>
+                                                <td class="dict-reorder">
+                                                    <button
+                                                        type="button"
+                                                        class="dict-arrow"
+                                                        title="Move up"
+                                                        prop:disabled=up_disabled
+                                                        on:click=on_move_up
+                                                    >"▲"</button>
+                                                    <button
+                                                        type="button"
+                                                        class="dict-arrow"
+                                                        title="Move down"
+                                                        prop:disabled=down_disabled
+                                                        on:click=on_move_down
+                                                    >"▼"</button>
+                                                </td>
                                                 <td>{d.name.clone()}</td>
-                                                <td>{format!("v{fmt}")}</td>
-                                                <td class="muted">{rev}</td>
                                                 <td>{tc}</td>
                                                 <td><button type="button" on:click=on_delete>"Delete"</button></td>
                                             </tr>
@@ -1057,4 +1135,16 @@ async fn yield_to_browser() {
         let _ = win.request_animation_frame(resolve_cb.as_ref().unchecked_ref());
     });
     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+async fn send_reorder(ordered_ids: Vec<i64>) {
+    let args = js_sys::Object::new();
+    let arr = js_sys::Array::new();
+    for id in &ordered_ids {
+        arr.push(&JsValue::from_f64(*id as f64));
+    }
+    let _ = js_sys::Reflect::set(&args, &JsValue::from_str("orderedIds"), &arr);
+    if let Err(e) = invoke("reorder_dictionaries", args.into()).await {
+        web_sys::console::warn_1(&format!("reorder: {}", stringify_err(e)).into());
+    }
 }

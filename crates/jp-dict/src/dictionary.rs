@@ -60,6 +60,44 @@ impl Db {
             Ok(())
         })
     }
+
+    pub fn set_dictionary_enabled(&self, id: i64, enabled: bool) -> Result<()> {
+        self.with_conn(|c| {
+            c.execute(
+                "UPDATE dictionary SET enabled = ? WHERE id = ?",
+                rusqlite::params![if enabled { 1 } else { 0 }, id],
+            )
+            .map_err(|e| Error::Other(format!("set enabled: {e}")))?;
+            Ok(())
+        })
+    }
+
+    /// Re-number priorities so the first id in `ordered_ids` has the
+    /// highest, the last has the lowest. Run as a single transaction
+    /// — partial updates would leave the list inconsistent.
+    pub fn reorder_dictionaries(&self, ordered_ids: &[i64]) -> Result<()> {
+        self.with_conn_mut(|conn| {
+            let tx = conn
+                .transaction()
+                .map_err(|e| Error::Other(format!("begin reorder tx: {e}")))?;
+            // Top of list gets the highest priority. Use the slice
+            // length as the top so we never collide with rows that
+            // happen not to be in `ordered_ids` (those keep their
+            // existing priorities, which will sort below us).
+            let top = ordered_ids.len() as i64;
+            for (i, id) in ordered_ids.iter().enumerate() {
+                let priority = top - i as i64;
+                tx.execute(
+                    "UPDATE dictionary SET priority = ? WHERE id = ?",
+                    rusqlite::params![priority, id],
+                )
+                .map_err(|e| Error::Other(format!("update priority: {e}")))?;
+            }
+            tx.commit()
+                .map_err(|e| Error::Other(format!("commit reorder: {e}")))?;
+            Ok(())
+        })
+    }
 }
 
 #[cfg(test)]
