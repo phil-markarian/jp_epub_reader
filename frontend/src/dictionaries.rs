@@ -489,7 +489,11 @@ pub fn DictionariesPanel() -> impl IntoView {
     // re-run the scan against the source folder so the rows for
     // the moved-away zips disappear from the preview.
     let move_zips_to_picked_dir = move |paths: Vec<String>| {
+        web_sys::console::log_1(
+            &format!("[dict move] handler entered with {} path(s)", paths.len()).into(),
+        );
         if paths.is_empty() {
+            set_banner.set(Some("Nothing to move (no problematic zips).".into()));
             return;
         }
         spawn_local(async move {
@@ -499,19 +503,22 @@ pub fn DictionariesPanel() -> impl IntoView {
                 &JsValue::from_str("directory"),
                 &JsValue::from_bool(true),
             );
-            let _ = js_sys::Reflect::set(
-                &opts,
-                &JsValue::from_str("title"),
-                &JsValue::from_str("Move dictionaries to…"),
-            );
+            web_sys::console::log_1(&"[dict move] opening dialog…".into());
             let picked = match open(opts.into()).await {
                 Ok(v) => v,
                 Err(e) => {
-                    set_banner.set(Some(format!("dialog: {}", stringify_err(e))));
+                    let msg = stringify_err(e);
+                    web_sys::console::warn_1(&format!("[dict move] dialog err: {msg}").into());
+                    set_banner.set(Some(format!("dialog: {msg}")));
                     return;
                 }
             };
-            let Some(dir) = picked.as_string() else { return };
+            web_sys::console::log_1(&"[dict move] dialog returned".into());
+            let Some(dir) = picked.as_string() else {
+                web_sys::console::log_1(&"[dict move] user cancelled".into());
+                return;
+            };
+            web_sys::console::log_1(&format!("[dict move] target: {dir}").into());
 
             let args = js_sys::Object::new();
             let arr = js_sys::Array::new();
