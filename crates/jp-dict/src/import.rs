@@ -244,9 +244,23 @@ fn read_index(archive: &mut zip::ZipArchive<std::fs::File>) -> Result<IndexJson>
     let mut f = archive
         .by_name("index.json")
         .map_err(|e| Error::Other(format!("zip missing index.json: {e}")))?;
-    let mut buf = String::new();
-    f.read_to_string(&mut buf)
-        .map_err(|e| Error::Other(format!("read index.json: {e}")))?;
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut tmp = [0u8; 8 * 1024];
+    loop {
+        match f.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => bytes.extend_from_slice(&tmp[..n]),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("Invalid checksum") || msg.contains("checksum") {
+                    break;
+                }
+                return Err(Error::Other(format!("read index.json: {e}")));
+            }
+        }
+    }
+    let buf = String::from_utf8(bytes)
+        .map_err(|e| Error::Other(format!("utf8 index.json: {e}")))?;
     serde_json::from_str::<IndexJson>(&buf)
         .map_err(|e| Error::Other(format!("parse index.json: {e}")))
 }
@@ -258,9 +272,31 @@ fn parse_bank(
     let mut f = archive
         .by_name(name)
         .map_err(|e| Error::Other(format!("zip missing {name}: {e}")))?;
-    let mut buf = String::new();
-    f.read_to_string(&mut buf)
-        .map_err(|e| Error::Other(format!("read {name}: {e}")))?;
+
+    // Some Yomitan repacks (notably 大辞林第四版, デジタル大辞泉) ship
+    // with bad CRCs in the central directory even though the
+    // decompressed data is valid — the system `unzip` reports the
+    // same mismatches. Read in chunks so when the zip crate raises
+    // its end-of-stream checksum error we can keep the bytes
+    // already extracted and surface only genuine I/O failures.
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut tmp = [0u8; 64 * 1024];
+    loop {
+        match f.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => bytes.extend_from_slice(&tmp[..n]),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("Invalid checksum") || msg.contains("checksum") {
+                    tracing::warn!(file = name, "CRC mismatch ignored; data appears intact");
+                    break;
+                }
+                return Err(Error::Other(format!("read {name}: {e}")));
+            }
+        }
+    }
+    let buf = String::from_utf8(bytes)
+        .map_err(|e| Error::Other(format!("utf8 {name}: {e}")))?;
     serde_json::from_str::<Vec<serde_json::Value>>(&buf)
         .map_err(|e| Error::Other(format!("parse {name}: {e}")))
 }
