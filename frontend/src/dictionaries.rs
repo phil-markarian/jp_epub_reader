@@ -535,6 +535,9 @@ pub fn DictionariesPanel() -> impl IntoView {
                 Ok(v) => {
                     let arr = js_sys::Array::from(&v);
                     let total = arr.length() as usize;
+                    web_sys::console::log_1(
+                        &format!("[dict move] backend returned {total} outcome(s)").into(),
+                    );
                     let mut moved = 0usize;
                     let mut failed_msgs: Vec<String> = Vec::new();
                     for i in 0..arr.length() {
@@ -544,6 +547,13 @@ pub fn DictionariesPanel() -> impl IntoView {
                             .and_then(|x| x.as_string())
                             .unwrap_or_default();
                         if kind == "moved" {
+                            let to = js_sys::Reflect::get(&entry, &JsValue::from_str("to"))
+                                .ok()
+                                .and_then(|x| x.as_string())
+                                .unwrap_or_default();
+                            web_sys::console::log_1(
+                                &format!("[dict move] moved to {to}").into(),
+                            );
                             moved += 1;
                         } else {
                             let from = js_sys::Reflect::get(&entry, &JsValue::from_str("from"))
@@ -622,9 +632,15 @@ pub fn DictionariesPanel() -> impl IntoView {
                         return view! { <span></span> }.into_any();
                     }
                     let total = rows.len();
-                    let (imp, skp, fld, can, done) = counts.get();
+                    let (imp, skp, fld, can, _done) = counts.get();
+                    // Header counter shows only items the backend
+                    // actually processed (imported / skipped / failed);
+                    // cancelled rows don't count toward the X. After
+                    // a Cancel mid-run this reads e.g. "12 / 66" with
+                    // the rest reported in the counts line below.
+                    let real_done = imp + skp + fld;
                     let pct = if total > 0 {
-                        (done as f64 / total as f64 * 100.0) as i32
+                        (real_done as f64 / total as f64 * 100.0) as i32
                     } else { 0 };
                     view! {
                         <div class="dict-modal-backdrop" role="dialog" aria-modal="true">
@@ -632,7 +648,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                 <header class="dict-modal-header">
                                     <h3>"Importing dictionaries"</h3>
                                     <span class="muted">
-                                        {format!("{done} / {total}")}
+                                        {format!("{real_done} / {total}")}
                                     </span>
                                 </header>
                                 <div class="dict-progress-bar">
