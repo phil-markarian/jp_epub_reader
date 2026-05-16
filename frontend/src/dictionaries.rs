@@ -61,6 +61,7 @@ enum QueueStatus {
     Imported,
     Skipped,
     Failed,
+    Cancelled,
 }
 
 impl QueueStatus {
@@ -71,6 +72,7 @@ impl QueueStatus {
             Self::Imported => "queue-imported",
             Self::Skipped => "queue-skipped",
             Self::Failed => "queue-failed",
+            Self::Cancelled => "queue-cancelled",
         }
     }
     fn label(&self) -> &'static str {
@@ -80,6 +82,7 @@ impl QueueStatus {
             Self::Imported => "Imported",
             Self::Skipped => "Skipped",
             Self::Failed => "Failed",
+            Self::Cancelled => "Cancelled",
         }
     }
 }
@@ -118,12 +121,16 @@ pub fn DictionariesPanel() -> impl IntoView {
         std::collections::HashSet::new(),
     );
     let (queue_rows, set_queue_rows) = signal::<Vec<QueueRow>>(Vec::new());
-    let (counts, set_counts) = signal::<(usize, usize, usize, usize)>((0, 0, 0, 0));
-    // (imported, skipped, failed, done) — derived from row signal
-    // updates inside the import loop.
+    let (counts, set_counts) = signal::<(usize, usize, usize, usize, usize)>((0, 0, 0, 0, 0));
+    // (imported, skipped, failed, cancelled, done) — derived from
+    // row signal updates inside the import loop.
     let (busy, set_busy) = signal::<bool>(false);
     let (scanning, set_scanning) = signal::<bool>(false);
     let (banner, set_banner) = signal::<Option<String>>(None);
+    // Cancel flag — set by the modal's Cancel button. The import
+    // loop reads this at the top of each iteration via get_untracked
+    // and bails (marking remaining rows Cancelled) when true.
+    let (cancel_read, cancel_write) = signal::<bool>(false);
 
     let refresh = move || {
         spawn_local(async move {
@@ -222,18 +229,37 @@ pub fn DictionariesPanel() -> impl IntoView {
             .collect();
         let total = rows.len();
         set_queue_rows.set(rows.clone());
-        set_counts.set((0, 0, 0, 0));
+        set_counts.set((0, 0, 0, 0, 0));
         set_busy.set(true);
         set_banner.set(None);
+        // Reset cancel flag for the new batch.
+        cancel_write.set(false);
 
         spawn_local(async move {
             let mut imported = 0usize;
             let mut skipped = 0usize;
             let mut failed = 0usize;
-            for row in rows {
+            let mut cancelled = 0usize;
+            let mut iter = rows.into_iter();
+            while let Some(row) = iter.next() {
+                // Check the cancel flag BEFORE marking running so the
+                // currently-running row isn't a phantom "Running".
+                if cancel_read.get_untracked() {
+                    row.status.set(QueueStatus::Cancelled);
+                    cancelled += 1;
+                    set_counts.set((
+                        imported,
+                        skipped,
+                        failed,
+                        cancelled,
+                        imported + skipped + failed + cancelled,
+                    ));
+                    continue;
+                }
                 row.status.set(QueueStatus::Running);
                 // Let the browser paint the Running state before
-                // we block on the IPC. rAF + microtask flush.
+                // we block on the IPC. Two rAFs flush the style
+                // change in WKWebView.
                 yield_to_browser().await;
 
                 let args = js_sys::Object::new();
@@ -270,17 +296,45 @@ pub fn DictionariesPanel() -> impl IntoView {
                     }
                 };
                 row.status.set(next);
-                set_counts.set((imported, skipped, failed, imported + skipped + failed));
+                set_counts.set((
+                    imported,
+                    skipped,
+                    failed,
+                    cancelled,
+                    imported + skipped + failed + cancelled,
+                ));
             }
-            set_banner.set(Some(format!(
-                "{total} processed: {imported} imported, {skipped} skipped, {failed} failed.",
-            )));
+            // Drain any remaining rows (the loop sets each to
+            // Cancelled, but `iter` may have unyielded items if
+            // the cancel arrived between iterations).
+            for row in iter {
+                row.status.set(QueueStatus::Cancelled);
+                cancelled += 1;
+            }
+            set_counts.set((
+                imported,
+                skipped,
+                failed,
+                cancelled,
+                imported + skipped + failed + cancelled,
+            ));
+            let summary = if cancelled > 0 {
+                format!(
+                    "{total} queued: {imported} imported, {skipped} skipped, {failed} failed, {cancelled} cancelled.",
+                )
+            } else {
+                format!(
+                    "{total} processed: {imported} imported, {skipped} skipped, {failed} failed.",
+                )
+            };
+            set_banner.set(Some(summary));
             set_busy.set(false);
             set_preview.set(Vec::new());
             set_selected.set(std::collections::HashSet::new());
             refresh();
         });
     };
+
 
     let toggle_all = move |checked: bool| {
         if checked {
@@ -298,7 +352,7 @@ pub fn DictionariesPanel() -> impl IntoView {
 
     let clear_queue = move |_| {
         set_queue_rows.set(Vec::new());
-        set_counts.set((0, 0, 0, 0));
+        set_counts.set((0, 0, 0, 0, 0));
     };
 
     view! {
@@ -316,72 +370,105 @@ pub fn DictionariesPanel() -> impl IntoView {
                 </div>
                 {move || banner.get().map(|b| view! { <div class="banner">{b}</div> })}
 
-                // Live import queue.
+                // Modal import queue. Shown whenever there are queue
+                // rows; busy controls Cancel vs Close button. The
+                // backdrop and `aria-modal` semantics block clicks
+                // on the rest of the page during import.
                 {move || {
                     let rows = queue_rows.get();
                     if rows.is_empty() {
                         return view! { <span></span> }.into_any();
                     }
                     let total = rows.len();
-                    let (imp, skp, fld, done) = counts.get();
+                    let (imp, skp, fld, can, done) = counts.get();
                     let pct = if total > 0 {
                         (done as f64 / total as f64 * 100.0) as i32
                     } else { 0 };
                     view! {
-                        <div class="dict-queue">
-                            <div class="row">
-                                <strong>"Import queue"</strong>
-                                <span class="muted">
-                                    {format!("{done} / {total}")}
-                                </span>
-                                <span class="muted">
+                        <div class="dict-modal-backdrop" role="dialog" aria-modal="true">
+                            <div class="dict-modal">
+                                <header class="dict-modal-header">
+                                    <h3>"Importing dictionaries"</h3>
+                                    <span class="muted">
+                                        {format!("{done} / {total}")}
+                                    </span>
+                                </header>
+                                <div class="dict-progress-bar">
+                                    <div class="dict-progress-fill"
+                                        style=format!("width: {pct}%")></div>
+                                </div>
+                                <div class="dict-modal-counts muted">
                                     {format!(
-                                        "{imp} imported • {skp} skipped • {fld} failed"
+                                        "{imp} imported • {skp} skipped • {fld} failed{}",
+                                        if can > 0 { format!(" • {can} cancelled") } else { String::new() }
                                     )}
-                                </span>
-                                {(!busy.get()).then(|| view! {
-                                    <button type="button" on:click=clear_queue>"Clear"</button>
-                                })}
-                            </div>
-                            <div class="dict-progress-bar">
-                                <div class="dict-progress-fill"
-                                    style=format!("width: {pct}%")></div>
-                            </div>
-                            <table class="dict-table dict-queue-table">
-                                <thead>
-                                    <tr>
-                                        <th>"#"</th>
-                                        <th>"Name"</th>
-                                        <th>"Status"</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {rows.into_iter().map(|row| {
-                                        let idx = row.index;
-                                        let name = row.name.clone();
-                                        let status = row.status.clone();
-                                        view! {
-                                            <tr class="queue-row">
-                                                <td class="muted">{idx}</td>
-                                                <td>{name}</td>
-                                                <td>
-                                                    {
-                                                        let s = status.clone();
-                                                        move || {
-                                                            let st = s.get();
-                                                            view! {
-                                                                <span class=format!("queue-status {}", st.css_class())>
-                                                                    {st.label()}
-                                                                </span>
-                                                            }
-                                                        }
-                                                    }
-                                                </td>
+                                </div>
+                                <div class="dict-modal-list">
+                                    <table class="dict-table dict-queue-table">
+                                        <thead>
+                                            <tr>
+                                                <th>"#"</th>
+                                                <th>"Name"</th>
+                                                <th>"Status"</th>
                                             </tr>
-                                        }
-                                    }).collect_view()}
-                                </tbody>
-                            </table>
+                                        </thead>
+                                        <tbody>
+                                            {rows.into_iter().map(|row| {
+                                                let idx = row.index;
+                                                let name = row.name.clone();
+                                                let status = row.status.clone();
+                                                view! {
+                                                    <tr class="queue-row">
+                                                        <td class="muted">{idx}</td>
+                                                        <td>{name}</td>
+                                                        <td>
+                                                            {
+                                                                let s = status.clone();
+                                                                move || {
+                                                                    let st = s.get();
+                                                                    view! {
+                                                                        <span class=format!("queue-status {}", st.css_class())>
+                                                                            {st.label()}
+                                                                        </span>
+                                                                    }
+                                                                }
+                                                            }
+                                                        </td>
+                                                    </tr>
+                                                }
+                                            }).collect_view()}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <footer class="dict-modal-footer">
+                                    {move || if busy.get() {
+                                        let on_cancel = move |_| cancel_write.set(true);
+                                        view! {
+                                            <button
+                                                type="button"
+                                                class="dict-cancel-btn"
+                                                on:click=on_cancel
+                                                prop:disabled=move || cancel_read.get()
+                                            >
+                                                {move || if cancel_read.get() {
+                                                    "Cancelling…"
+                                                } else {
+                                                    "Cancel"
+                                                }}
+                                            </button>
+                                        }.into_any()
+                                    } else {
+                                        view! {
+                                            <button
+                                                type="button"
+                                                on:click=clear_queue
+                                            >
+                                                "Close"
+                                            </button>
+                                        }.into_any()
+                                    }}
+                                </footer>
+                            </div>
                         </div>
                     }.into_any()
                 }}
@@ -560,14 +647,23 @@ pub fn DictionariesPanel() -> impl IntoView {
 
 /// Yield to the browser long enough for it to paint the latest signal
 /// updates. Two animation frames + a microtask is the rough lower
-/// bound that reliably flushes a CSS class change in WKWebView.
+/// bound that reliably flushes a CSS class change in WKWebView; we
+/// also add a small setTimeout(0) so the Cancel button's click event
+/// has a chance to fire and flip the cancel flag between zips.
 async fn yield_to_browser() {
     let promise = js_sys::Promise::new(&mut |resolve, _| {
         let win = web_sys::window().expect("no window");
         let resolve_cb = Closure::once_into_js(move || {
             let win2 = web_sys::window().expect("no window");
             let resolve2 = Closure::once_into_js(move || {
-                let _ = resolve.call0(&JsValue::NULL);
+                let win3 = web_sys::window().expect("no window");
+                let resolve3 = Closure::once_into_js(move || {
+                    let _ = resolve.call0(&JsValue::NULL);
+                });
+                let _ = win3.set_timeout_with_callback_and_timeout_and_arguments_0(
+                    resolve3.as_ref().unchecked_ref(),
+                    0,
+                );
             });
             let _ = win2.request_animation_frame(resolve2.as_ref().unchecked_ref());
         });

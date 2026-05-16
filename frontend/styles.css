@@ -204,15 +204,69 @@ details[open] > summary::before { transform: rotate(90deg); }
 .dict-status-unsupported-format { color: #b85c00; }
 .dict-status-broken { color: #b00020; }
 
-/* Import progress strip — single dict at a time, with a fill bar */
-.dict-queue { margin: 12px 0; }
+/* Import progress modal */
+.dict-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  /* Block clicks on whatever's underneath */
+  pointer-events: auto;
+}
+.dict-modal {
+  background: #ffffff;
+  color: #111;
+  width: min(640px, 92vw);
+  max-height: 80vh;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  padding: 18px 20px;
+  gap: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  .dict-modal { background: #1c1c1e; color: #e8e8e8; }
+}
+.dict-modal-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.dict-modal-header h3 { margin: 0; font-size: 1.05em; }
+.dict-modal-counts { font-size: 0.88em; }
+.dict-modal-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  border: 1px solid rgba(127, 127, 127, 0.2);
+  border-radius: 6px;
+}
+.dict-modal-list .dict-table { margin: 0; }
+.dict-modal-list .dict-table th { position: sticky; top: 0; background: inherit; }
+.dict-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.dict-cancel-btn {
+  background: rgba(176, 0, 32, 0.08);
+  border: 1px solid rgba(176, 0, 32, 0.4);
+  color: #b00020;
+  font-weight: 600;
+}
+.dict-cancel-btn:hover { background: rgba(176, 0, 32, 0.18); }
+
 .dict-progress-bar {
   height: 8px;
   width: 100%;
   background: rgba(127, 127, 127, 0.18);
   border-radius: 4px;
   overflow: hidden;
-  margin: 8px 0 6px 0;
+  margin: 6px 0;
 }
 .dict-progress-fill {
   height: 100%;
@@ -223,13 +277,20 @@ details[open] > summary::before { transform: rotate(90deg); }
   );
   transition: width 200ms ease;
 }
-.dict-progress-current { margin: 4px 0; font-size: 0.95em; }
-.dict-progress-counts { font-size: 0.88em; }
+
+.queue-status {
+  font-size: 0.85em;
+  font-weight: 600;
+}
+.queue-status.queue-queued { color: #888; font-weight: 400; }
 .queue-status.queue-running {
   color: #1a4fb0;
-  font-weight: 600;
   animation: queue-pulse 1.2s ease-in-out infinite;
 }
+.queue-status.queue-imported { color: #2a7a36; }
+.queue-status.queue-skipped { color: #888; font-weight: 400; }
+.queue-status.queue-failed { color: #b00020; }
+.queue-status.queue-cancelled { color: #b85c00; font-weight: 400; }
 @keyframes queue-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
