@@ -19,11 +19,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// row written so far is rolled back. Default = never cancelled.
 static NEVER_CANCEL: AtomicBool = AtomicBool::new(false);
 
-/// How often to read the cancel flag while inserting rows. Reads are
-/// cheap but doing it every row would still add up on a million-row
-/// dictionary; once per 256 rows means at most ~10ms of wasted work
-/// after a cancel request.
+/// How often to read the cancel flag and emit a progress tick while
+/// inserting rows. Reads are cheap but doing it every row would still
+/// add up on a million-row dictionary; once per 256 rows means at
+/// most ~10ms of wasted work after a cancel request, and we get
+/// roughly 1–2 progress events per percent of a typical kokugo dict.
 const CANCEL_CHECK_EVERY: usize = 256;
+
+/// Progress callback signature: (bytes_done, bytes_total). Both are
+/// uncompressed-byte counts derived from the zip central directory's
+/// sizes for the bank files we're processing. Frontend converts to a
+/// percentage for the row's progress bar.
+pub type ProgressFn<'a> = &'a (dyn Fn(u64, u64) + Sync);
+
+fn noop_progress(_: u64, _: u64) {}
 
 fn check_cancel(cancel: &AtomicBool) -> Result<()> {
     if cancel.load(Ordering::Relaxed) {
@@ -97,15 +106,28 @@ impl Db {
         self.import_zip_with_cancel(zip_path, &NEVER_CANCEL)
     }
 
-    /// Same as `import_zip` but periodically reads `cancel` and aborts
-    /// the in-flight transaction (rolling back every row written so
-    /// far) when the caller flips it to `true`. Used by the Tauri
-    /// command so the modal's Cancel button can actually stop a
-    /// long-running dict import.
+    /// Same as `import_zip` plus cancel polling. Used internally by
+    /// the Tauri command, but kept as a public no-progress entry
+    /// point for callers that don't care about per-row progress.
     pub fn import_zip_with_cancel(
         &self,
         zip_path: &Path,
         cancel: &AtomicBool,
+    ) -> Result<Option<ImportSummary>> {
+        self.import_zip_full(zip_path, cancel, &noop_progress)
+    }
+
+    /// Full import API: cancel polling + per-row progress callbacks.
+    /// `on_progress` is invoked periodically with (bytes_done,
+    /// bytes_total) where bytes are uncompressed bank-file sizes.
+    /// The Tauri command wires this through to a Tauri event so the
+    /// frontend can render a real progress bar inside the row's
+    /// "Importing…" status cell.
+    pub fn import_zip_full(
+        &self,
+        zip_path: &Path,
+        cancel: &AtomicBool,
+        on_progress: ProgressFn<'_>,
     ) -> Result<Option<ImportSummary>> {
         let file = std::fs::File::open(zip_path)
             .map_err(|e| Error::Other(format!("open zip {zip_path:?}: {e}")))?;
@@ -162,6 +184,30 @@ impl Db {
         kanji_files.sort();
         tag_files.sort();
 
+        // Pre-pass: sum uncompressed bank sizes so the progress
+        // callback can report (bytes_done, bytes_total). Opening each
+        // entry just to read its central-directory size is cheap.
+        let all_files: Vec<&String> = term_files
+            .iter()
+            .chain(term_meta_files.iter())
+            .chain(kanji_files.iter())
+            .chain(tag_files.iter())
+            .collect();
+        let mut bank_sizes: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
+        let mut total_bytes: u64 = 0;
+        for name in &all_files {
+            let f = archive
+                .by_name(name)
+                .map_err(|e| Error::Other(format!("size {name}: {e}")))?;
+            let sz = f.size();
+            bank_sizes.insert((*name).clone(), sz);
+            total_bytes = total_bytes.saturating_add(sz);
+        }
+        // Initial "0%" tick so the bar appears immediately rather than
+        // waiting for the first batch of rows.
+        on_progress(0, total_bytes);
+
         let mut term_count = 0usize;
         let mut meta_count = 0usize;
         let mut kanji_count = 0usize;
@@ -186,25 +232,74 @@ impl Db {
             .map_err(|e| Error::Other(format!("insert dictionary: {e}")))?;
             let dict_id = tx.last_insert_rowid();
 
+            let mut bytes_done: u64 = 0;
+            let progress_for_bank = |bank_size: u64,
+                                     bytes_done: u64,
+                                     i: usize,
+                                     total_rows: usize| {
+                let within = if total_rows == 0 {
+                    bank_size
+                } else {
+                    (bank_size as f64 * (i as f64 / total_rows as f64)) as u64
+                };
+                on_progress(bytes_done.saturating_add(within), total_bytes);
+            };
+
             for name in &term_files {
                 check_cancel(cancel)?;
+                let bank_size = *bank_sizes.get(name).unwrap_or(&0);
                 let rows = parse_bank(&mut archive, name)?;
-                term_count += insert_term_rows(&tx, dict_id, &rows, cancel)?;
+                term_count += insert_term_rows(
+                    &tx,
+                    dict_id,
+                    &rows,
+                    cancel,
+                    &|i, total| progress_for_bank(bank_size, bytes_done, i, total),
+                )?;
+                bytes_done = bytes_done.saturating_add(bank_size);
+                on_progress(bytes_done, total_bytes);
             }
             for name in &term_meta_files {
                 check_cancel(cancel)?;
+                let bank_size = *bank_sizes.get(name).unwrap_or(&0);
                 let rows = parse_bank(&mut archive, name)?;
-                meta_count += insert_term_meta_rows(&tx, dict_id, &rows, cancel)?;
+                meta_count += insert_term_meta_rows(
+                    &tx,
+                    dict_id,
+                    &rows,
+                    cancel,
+                    &|i, total| progress_for_bank(bank_size, bytes_done, i, total),
+                )?;
+                bytes_done = bytes_done.saturating_add(bank_size);
+                on_progress(bytes_done, total_bytes);
             }
             for name in &kanji_files {
                 check_cancel(cancel)?;
+                let bank_size = *bank_sizes.get(name).unwrap_or(&0);
                 let rows = parse_bank(&mut archive, name)?;
-                kanji_count += insert_kanji_rows(&tx, dict_id, &rows, cancel)?;
+                kanji_count += insert_kanji_rows(
+                    &tx,
+                    dict_id,
+                    &rows,
+                    cancel,
+                    &|i, total| progress_for_bank(bank_size, bytes_done, i, total),
+                )?;
+                bytes_done = bytes_done.saturating_add(bank_size);
+                on_progress(bytes_done, total_bytes);
             }
             for name in &tag_files {
                 check_cancel(cancel)?;
+                let bank_size = *bank_sizes.get(name).unwrap_or(&0);
                 let rows = parse_bank(&mut archive, name)?;
-                tag_count += insert_tag_rows(&tx, dict_id, &rows, cancel)?;
+                tag_count += insert_tag_rows(
+                    &tx,
+                    dict_id,
+                    &rows,
+                    cancel,
+                    &|i, total| progress_for_bank(bank_size, bytes_done, i, total),
+                )?;
+                bytes_done = bytes_done.saturating_add(bank_size);
+                on_progress(bytes_done, total_bytes);
             }
 
             // Final check before commit — if the user cancelled while
@@ -306,6 +401,7 @@ fn insert_term_rows(
     dict_id: i64,
     rows: &[serde_json::Value],
     cancel: &AtomicBool,
+    on_within: &dyn Fn(usize, usize),
 ) -> Result<usize> {
     // Tuple shape: [expression, reading, pos, rules, score,
     //               glossary_array, sequence, term_tags]
@@ -317,10 +413,12 @@ fn insert_term_rows(
         )
         .map_err(|e| Error::Other(format!("prepare term insert: {e}")))?;
 
+    let total = rows.len();
     let mut inserted = 0;
     for (i, row) in rows.iter().enumerate() {
         if i % CANCEL_CHECK_EVERY == 0 {
             check_cancel(cancel)?;
+            on_within(i, total);
         }
         let arr = match row.as_array() {
             Some(a) if a.len() >= 6 => a,
@@ -363,6 +461,7 @@ fn insert_term_meta_rows(
     dict_id: i64,
     rows: &[serde_json::Value],
     cancel: &AtomicBool,
+    on_within: &dyn Fn(usize, usize),
 ) -> Result<usize> {
     // Tuple shape: [expression, mode, data]
     let mut stmt = tx
@@ -372,10 +471,12 @@ fn insert_term_meta_rows(
         )
         .map_err(|e| Error::Other(format!("prepare term_meta insert: {e}")))?;
 
+    let total = rows.len();
     let mut inserted = 0;
     for (i, row) in rows.iter().enumerate() {
         if i % CANCEL_CHECK_EVERY == 0 {
             check_cancel(cancel)?;
+            on_within(i, total);
         }
         let arr = match row.as_array() {
             Some(a) if a.len() >= 3 => a,
@@ -402,6 +503,7 @@ fn insert_kanji_rows(
     dict_id: i64,
     rows: &[serde_json::Value],
     cancel: &AtomicBool,
+    on_within: &dyn Fn(usize, usize),
 ) -> Result<usize> {
     // Tuple shape: [char, onyomi, kunyomi, tags, meanings_array, stats_obj]
     let mut stmt = tx
@@ -412,10 +514,12 @@ fn insert_kanji_rows(
         )
         .map_err(|e| Error::Other(format!("prepare kanji insert: {e}")))?;
 
+    let total = rows.len();
     let mut inserted = 0;
     for (i, row) in rows.iter().enumerate() {
         if i % CANCEL_CHECK_EVERY == 0 {
             check_cancel(cancel)?;
+            on_within(i, total);
         }
         let arr = match row.as_array() {
             Some(a) if a.len() >= 5 => a,
@@ -448,6 +552,7 @@ fn insert_tag_rows(
     dict_id: i64,
     rows: &[serde_json::Value],
     cancel: &AtomicBool,
+    on_within: &dyn Fn(usize, usize),
 ) -> Result<usize> {
     // Tuple shape: [name, category, sort_key, description, score]
     let mut stmt = tx
@@ -458,10 +563,12 @@ fn insert_tag_rows(
         )
         .map_err(|e| Error::Other(format!("prepare tag insert: {e}")))?;
 
+    let total = rows.len();
     let mut inserted = 0;
     for (i, row) in rows.iter().enumerate() {
         if i % CANCEL_CHECK_EVERY == 0 {
             check_cancel(cancel)?;
+            on_within(i, total);
         }
         let arr = match row.as_array() {
             Some(a) if a.len() >= 5 => a,

@@ -11,10 +11,21 @@ use jp_dict::{peek_index, Dictionary, ImportSummary};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
-use tauri::State;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tauri::{AppHandle, Emitter, State};
 
 const SETTING_DICT_LAST_FOLDER: &str = "dict.last_folder";
+
+/// Streamed during a single dictionary import. `path` lets the
+/// frontend match the event to a row; `current`/`total` are
+/// uncompressed-byte counts of the zip's bank files.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportProgressPayload<'a> {
+    path: &'a str,
+    current: u64,
+    total: u64,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -159,6 +170,7 @@ fn preview_zip(zip_path: &Path, existing: &HashSet<String>) -> DictPreview {
 #[tauri::command]
 pub async fn import_single_dictionary(
     path: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ImportOutcome, String> {
     let db = state.dict_db.clone();
@@ -166,9 +178,35 @@ pub async fn import_single_dictionary(
     // Reset on every call — a stale cancel from a previous run would
     // otherwise abort the first row of every subsequent import.
     cancel.store(false, Ordering::Release);
+
+    // Throttle progress events so we don't spam the IPC channel.
+    // Emit only when bytes_done has moved at least ~0.5% (= total /
+    // 200) since the last emit. Stored as AtomicU64 so the closure
+    // can mutate it without &mut.
+    let last_emit_bytes = std::sync::Arc::new(AtomicU64::new(0));
+    let progress_path = path.clone();
+    let app_for_progress = app.clone();
+    let last_emit = last_emit_bytes.clone();
+    let on_progress = move |current: u64, total: u64| {
+        let prev = last_emit.load(Ordering::Relaxed);
+        let threshold = (total / 200).max(64 * 1024);
+        if current.saturating_sub(prev) < threshold && current != total && current != 0 {
+            return;
+        }
+        last_emit.store(current, Ordering::Relaxed);
+        let _ = app_for_progress.emit(
+            "dict-row-progress",
+            ImportProgressPayload {
+                path: &progress_path,
+                current,
+                total,
+            },
+        );
+    };
+
     tokio::task::spawn_blocking(move || -> ImportOutcome {
         let zip_path = PathBuf::from(&path);
-        match db.import_zip_with_cancel(&zip_path, &cancel) {
+        match db.import_zip_full(&zip_path, &cancel, &on_progress) {
             Ok(Some(summary)) => ImportOutcome::Imported {
                 path: path.clone(),
                 summary,

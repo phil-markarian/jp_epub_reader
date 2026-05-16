@@ -24,6 +24,20 @@ extern "C" {
 
     #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "dialog"], catch)]
     async fn open(options: JsValue) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "event"], catch)]
+    async fn listen(
+        event: &str,
+        handler: &Closure<dyn FnMut(JsValue)>,
+    ) -> Result<JsValue, JsValue>;
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportProgressEvent {
+    path: String,
+    current: u64,
+    total: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -101,6 +115,10 @@ struct QueueRow {
     /// surfaced as a tooltip on hover and logged to the JS console
     /// so the user can diagnose what went wrong.
     error: ArcRwSignal<Option<String>>,
+    /// Live (current, total) byte counts during the row's import;
+    /// updated from the `dict-row-progress` Tauri event. Used to
+    /// draw a progress bar inside the row's status cell.
+    progress: ArcRwSignal<Option<(u64, u64)>>,
 }
 
 fn stringify_err(v: JsValue) -> String {
@@ -115,6 +133,22 @@ fn basename(path: &str) -> String {
         .and_then(|s| s.to_str())
         .unwrap_or(path)
         .to_string()
+}
+
+fn format_bytes(n: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let n = n as f64;
+    if n >= GB {
+        format!("{:.2} GB", n / GB)
+    } else if n >= MB {
+        format!("{:.1} MB", n / MB)
+    } else if n >= KB {
+        format!("{:.0} KB", n / KB)
+    } else {
+        format!("{n:.0} B")
+    }
 }
 
 #[component]
@@ -191,6 +225,35 @@ pub fn DictionariesPanel() -> impl IntoView {
 
     refresh();
 
+    // Subscribe to `dict-row-progress` events from the backend. We
+    // do this once per panel mount; the closure looks up the
+    // currently-queued row by its path string and pokes its
+    // progress signal. Tauri's `listen` returns an unsubscribe
+    // function that we deliberately leak — the panel never unmounts
+    // in the current app.
+    {
+        let cb = Closure::wrap(Box::new(move |event: JsValue| {
+            let payload =
+                js_sys::Reflect::get(&event, &JsValue::from_str("payload"))
+                    .unwrap_or(JsValue::NULL);
+            let Ok(p) =
+                serde_wasm_bindgen::from_value::<ImportProgressEvent>(payload)
+            else {
+                return;
+            };
+            for row in queue_rows.get_untracked() {
+                if row.path == p.path {
+                    row.progress.set(Some((p.current, p.total)));
+                    break;
+                }
+            }
+        }) as Box<dyn FnMut(JsValue)>);
+        spawn_local(async move {
+            let _ = listen("dict-row-progress", &cb).await;
+            cb.forget();
+        });
+    }
+
     // On mount: if the user previously picked a folder, rescan it so
     // the panel comes up showing the same checklist (with up-to-date
     // "already imported" badges) instead of requiring a fresh
@@ -259,6 +322,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                     .unwrap_or_else(|| basename(&p.path)),
                 status: ArcRwSignal::new(QueueStatus::Queued),
                 error: ArcRwSignal::new(None),
+                progress: ArcRwSignal::new(None),
             })
             .collect();
         let total = rows.len();
@@ -345,6 +409,10 @@ pub fn DictionariesPanel() -> impl IntoView {
                     }
                 };
                 row.status.set(next);
+                // Drop the live progress now that the row is in a
+                // terminal state — the cell switches back to a plain
+                // status label.
+                row.progress.set(None);
                 set_counts.set((
                     imported,
                     skipped,
@@ -461,22 +529,44 @@ pub fn DictionariesPanel() -> impl IntoView {
                     let arr = js_sys::Array::from(&v);
                     let total = arr.length() as usize;
                     let mut moved = 0usize;
-                    let mut failed = 0usize;
+                    let mut failed_msgs: Vec<String> = Vec::new();
                     for i in 0..arr.length() {
-                        let kind = js_sys::Reflect::get(&arr.get(i), &JsValue::from_str("kind"))
+                        let entry = arr.get(i);
+                        let kind = js_sys::Reflect::get(&entry, &JsValue::from_str("kind"))
                             .ok()
                             .and_then(|x| x.as_string())
                             .unwrap_or_default();
                         if kind == "moved" {
                             moved += 1;
                         } else {
-                            failed += 1;
+                            let from = js_sys::Reflect::get(&entry, &JsValue::from_str("from"))
+                                .ok()
+                                .and_then(|x| x.as_string())
+                                .unwrap_or_default();
+                            let err = js_sys::Reflect::get(&entry, &JsValue::from_str("error"))
+                                .ok()
+                                .and_then(|x| x.as_string())
+                                .unwrap_or_default();
+                            let line = format!("{}: {}", basename(&from), err);
+                            web_sys::console::warn_1(
+                                &format!("[dict move] failed: {line}").into(),
+                            );
+                            failed_msgs.push(line);
                         }
                     }
-                    set_banner.set(Some(format!(
-                        "Moved {moved} / {total} dictionaries to {dir}{}",
-                        if failed > 0 { format!(" ({failed} failed)") } else { String::new() }
-                    )));
+                    let failed = failed_msgs.len();
+                    let banner_msg = if failed == 0 {
+                        format!("Moved {moved} dictionaries to {dir}")
+                    } else {
+                        // Surface the first failure inline so the
+                        // user has something to act on without
+                        // opening DevTools. Rest are in the console.
+                        let first = failed_msgs.first().cloned().unwrap_or_default();
+                        format!(
+                            "Moved {moved} / {total} to {dir} — {failed} failed (first: {first})"
+                        )
+                    };
+                    set_banner.set(Some(banner_msg));
                     // Re-scan the current dict folder so the moved
                     // rows drop out of the checklist.
                     if let Some(p) = current_folder.get_untracked() {
@@ -563,6 +653,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                 let name = row.name.clone();
                                                 let status = row.status.clone();
                                                 let error = row.error.clone();
+                                                let progress = row.progress.clone();
                                                 view! {
                                                     <tr
                                                         class="queue-row"
@@ -577,24 +668,43 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                             {
                                                                 let s = status.clone();
                                                                 let err = error.clone();
+                                                                let prog = progress.clone();
                                                                 move || {
                                                                     let st = s.get();
                                                                     let detail = if st == QueueStatus::Failed {
                                                                         err.get().map(|e| {
-                                                                            // Trim long messages
-                                                                            // for the cell; the
-                                                                            // full text is in
-                                                                            // the title attr.
                                                                             let short = if e.len() > 80 {
                                                                                 format!("{}…", &e[..80])
                                                                             } else { e };
                                                                             short
                                                                         })
                                                                     } else { None };
+                                                                    let bar = if st == QueueStatus::Running {
+                                                                        let (cur, tot) = prog.get().unwrap_or((0, 0));
+                                                                        let pct = if tot > 0 {
+                                                                            (cur as f64 / tot as f64 * 100.0).clamp(0.0, 100.0)
+                                                                        } else { 0.0 };
+                                                                        Some((pct, cur, tot))
+                                                                    } else { None };
                                                                     view! {
                                                                         <span class=format!("queue-status {}", st.css_class())>
                                                                             {st.label()}
                                                                         </span>
+                                                                        {bar.map(|(pct, cur, tot)| view! {
+                                                                            <div class="queue-row-bar">
+                                                                                <div
+                                                                                    class="queue-row-bar-fill"
+                                                                                    style=format!("width: {pct:.1}%")
+                                                                                ></div>
+                                                                            </div>
+                                                                            <div class="queue-row-bar-label muted">
+                                                                                {format!(
+                                                                                    "{pct:.0}% — {}/{}",
+                                                                                    format_bytes(cur),
+                                                                                    format_bytes(tot),
+                                                                                )}
+                                                                            </div>
+                                                                        })}
                                                                         {detail.map(|d| view! {
                                                                             <div class="queue-error muted">{d}</div>
                                                                         })}

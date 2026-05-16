@@ -365,6 +365,31 @@ details[open] > summary::before { transform: rotate(90deg); }
   white-space: normal;
   overflow-wrap: anywhere;
 }
+
+/* Per-row import progress bar. Sits below the "Importing…" label
+ * while the row is the currently-active import. */
+.queue-row-bar {
+  height: 5px;
+  width: 100%;
+  max-width: 220px;
+  background: rgba(127, 127, 127, 0.18);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.queue-row-bar-fill {
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    rgba(116, 163, 255, 0.85),
+    rgba(82, 170, 100, 0.85)
+  );
+  transition: width 120ms linear;
+}
+.queue-row-bar-label {
+  font-size: 0.75em;
+  margin-top: 2px;
+}
 @keyframes queue-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
