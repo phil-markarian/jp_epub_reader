@@ -411,14 +411,24 @@ details[open] > summary::before { transform: rotate(90deg); }
   z-index: 2000;
   max-width: 380px;
   min-width: 240px;
-  background: light-dark(#ffffff, #1c1c1e);
-  color: light-dark(#111, #e8e8e8);
-  border: 1px solid rgba(127, 127, 127, 0.3);
+  /* Solid fallback colors (no light-dark() — older WebKit may not
+   * support it, which would leave the popup transparent). The
+   * @media block below overrides for dark mode. */
+  background: #ffffff;
+  color: #111111;
+  border: 1px solid rgba(0, 0, 0, 0.18);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   padding: 10px 12px;
   font-size: 0.92em;
   pointer-events: none; /* don't steal Shift-hover from text underneath */
+}
+@media (prefers-color-scheme: dark) {
+  .lookup-popup {
+    background: #1c1c1e;
+    color: #e8e8e8;
+    border-color: rgba(255, 255, 255, 0.18);
+  }
 }
 .lookup-popup-source { margin-bottom: 8px; font-size: 1.05em; }
 .lookup-popup-hits { list-style: none; padding: 0; margin: 0; }
