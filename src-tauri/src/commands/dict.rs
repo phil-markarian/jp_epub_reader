@@ -61,7 +61,7 @@ pub enum DictPreviewStatus {
 }
 
 #[tauri::command]
-pub fn scan_dictionary_folder(
+pub async fn scan_dictionary_folder(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<DictPreview>, String> {
@@ -85,12 +85,14 @@ pub fn scan_dictionary_folder(
         .map(|d| d.name)
         .collect();
 
-    let zips = collect_zips(&root);
-    let mut out = Vec::with_capacity(zips.len());
-    for zip_path in &zips {
-        out.push(preview_zip(zip_path, &existing));
-    }
-    Ok(out)
+    // ~150 zip opens + JSON parses adds up; run off-thread so the
+    // UI keeps repainting (button state, etc.) during the scan.
+    tokio::task::spawn_blocking(move || -> Vec<DictPreview> {
+        let zips = collect_zips(&root);
+        zips.iter().map(|z| preview_zip(z, &existing)).collect()
+    })
+    .await
+    .map_err(|e| format!("scan task failed: {e}"))
 }
 
 /// Returns the folder path the user last scanned (or imported from),
@@ -148,27 +150,36 @@ fn preview_zip(zip_path: &Path, existing: &HashSet<String>) -> DictPreview {
 /// drives the batch — calling this once per selected path — which
 /// gives the JS event loop a chance to repaint between zips so the
 /// UI never appears to hang. Replaces the previous batch command.
+///
+/// The actual zip parse + sqlite write happens inside
+/// `tokio::task::spawn_blocking` so it doesn't tie up the main
+/// async runtime thread (a large dictionary takes seconds and was
+/// causing the macOS beachball when run inline).
 #[tauri::command]
-pub fn import_single_dictionary(
+pub async fn import_single_dictionary(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<ImportOutcome, String> {
-    let zip_path = PathBuf::from(&path);
-    let outcome = match state.dict_db.import_zip(&zip_path) {
-        Ok(Some(summary)) => ImportOutcome::Imported {
-            path: path.clone(),
-            summary,
-        },
-        Ok(None) => ImportOutcome::Skipped {
-            path: path.clone(),
-            reason: "already imported".into(),
-        },
-        Err(e) => ImportOutcome::Failed {
-            path: path.clone(),
-            error: e.to_string(),
-        },
-    };
-    Ok(outcome)
+    let db = state.dict_db.clone();
+    tokio::task::spawn_blocking(move || -> ImportOutcome {
+        let zip_path = PathBuf::from(&path);
+        match db.import_zip(&zip_path) {
+            Ok(Some(summary)) => ImportOutcome::Imported {
+                path: path.clone(),
+                summary,
+            },
+            Ok(None) => ImportOutcome::Skipped {
+                path: path.clone(),
+                reason: "already imported".into(),
+            },
+            Err(e) => ImportOutcome::Failed {
+                path: path.clone(),
+                error: e.to_string(),
+            },
+        }
+    })
+    .await
+    .map_err(|e| format!("import task failed: {e}"))
 }
 
 #[tauri::command]
