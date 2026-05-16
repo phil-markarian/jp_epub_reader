@@ -97,6 +97,10 @@ struct QueueRow {
     path: String,
     name: String,
     status: ArcRwSignal<QueueStatus>,
+    /// When a row fails, the backend error message stored here is
+    /// surfaced as a tooltip on hover and logged to the JS console
+    /// so the user can diagnose what went wrong.
+    error: ArcRwSignal<Option<String>>,
 }
 
 fn stringify_err(v: JsValue) -> String {
@@ -254,6 +258,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                     .clone()
                     .unwrap_or_else(|| basename(&p.path)),
                 status: ArcRwSignal::new(QueueStatus::Queued),
+                error: ArcRwSignal::new(None),
             })
             .collect();
         let total = rows.len();
@@ -314,12 +319,27 @@ pub fn DictionariesPanel() -> impl IntoView {
                                 QueueStatus::Skipped
                             }
                             _ => {
+                                let err_msg = js_sys::Reflect::get(&v, &JsValue::from_str("error"))
+                                    .ok()
+                                    .and_then(|x| x.as_string())
+                                    .unwrap_or_else(|| "unknown error".into());
+                                web_sys::console::warn_1(
+                                    &format!("[dict import] {} failed: {}", row.name, err_msg)
+                                        .into(),
+                                );
+                                row.error.set(Some(err_msg));
                                 failed += 1;
                                 QueueStatus::Failed
                             }
                         }
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        let err_msg = stringify_err(e);
+                        web_sys::console::warn_1(
+                            &format!("[dict import] {} ipc failure: {}", row.name, err_msg)
+                                .into(),
+                        );
+                        row.error.set(Some(err_msg));
                         failed += 1;
                         QueueStatus::Failed
                     }
@@ -468,19 +488,42 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                 let idx = row.index;
                                                 let name = row.name.clone();
                                                 let status = row.status.clone();
+                                                let error = row.error.clone();
                                                 view! {
-                                                    <tr class="queue-row">
+                                                    <tr
+                                                        class="queue-row"
+                                                        title={
+                                                            let err = error.clone();
+                                                            move || err.get().unwrap_or_default()
+                                                        }
+                                                    >
                                                         <td class="muted">{idx}</td>
                                                         <td>{name}</td>
                                                         <td>
                                                             {
                                                                 let s = status.clone();
+                                                                let err = error.clone();
                                                                 move || {
                                                                     let st = s.get();
+                                                                    let detail = if st == QueueStatus::Failed {
+                                                                        err.get().map(|e| {
+                                                                            // Trim long messages
+                                                                            // for the cell; the
+                                                                            // full text is in
+                                                                            // the title attr.
+                                                                            let short = if e.len() > 80 {
+                                                                                format!("{}…", &e[..80])
+                                                                            } else { e };
+                                                                            short
+                                                                        })
+                                                                    } else { None };
                                                                     view! {
                                                                         <span class=format!("queue-status {}", st.css_class())>
                                                                             {st.label()}
                                                                         </span>
+                                                                        {detail.map(|d| view! {
+                                                                            <div class="queue-error muted">{d}</div>
+                                                                        })}
                                                                     }
                                                                 }
                                                             }

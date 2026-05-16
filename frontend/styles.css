@@ -298,7 +298,21 @@ details[open] > summary::before { transform: rotate(90deg); }
   border-radius: 6px;
 }
 .dict-modal-list .dict-table { margin: 0; }
-.dict-modal-list .dict-table th { position: sticky; top: 0; background: inherit; }
+.dict-modal-list .dict-table th {
+  position: sticky;
+  top: 0;
+  /* Match the modal body — `inherit` resolved to transparent in
+   * this layout, leaking the row content through the header. */
+  background: light-dark(#ffffff, #1c1c1e);
+  z-index: 1;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.3);
+}
+@supports not (background: light-dark(#fff, #000)) {
+  .dict-modal-list .dict-table th { background: #ffffff; }
+  @media (prefers-color-scheme: dark) {
+    .dict-modal-list .dict-table th { background: #1c1c1e; }
+  }
+}
 .dict-modal-footer {
   display: flex;
   justify-content: flex-end;
@@ -344,6 +358,13 @@ details[open] > summary::before { transform: rotate(90deg); }
 .queue-status.queue-skipped { color: #888; font-weight: 400; }
 .queue-status.queue-failed { color: #b00020; }
 .queue-status.queue-cancelled { color: #b85c00; font-weight: 400; }
+.queue-error {
+  font-size: 0.78em;
+  margin-top: 2px;
+  max-width: 320px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 @keyframes queue-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
