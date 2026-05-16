@@ -531,7 +531,10 @@ pub fn DictionariesPanel() -> impl IntoView {
                 &JsValue::from_str("targetDir"),
                 &JsValue::from_str(&dir),
             );
-            match invoke("move_dictionary_zips", args.into()).await {
+            web_sys::console::log_1(&"[dict move] invoking move_dictionary_zips…".into());
+            let result = invoke("move_dictionary_zips", args.into()).await;
+            web_sys::console::log_1(&"[dict move] invoke resolved".into());
+            match result {
                 Ok(v) => {
                     let arr = js_sys::Array::from(&v);
                     let total = arr.length() as usize;
@@ -590,7 +593,13 @@ pub fn DictionariesPanel() -> impl IntoView {
                         run_scan(p);
                     }
                 }
-                Err(e) => set_banner.set(Some(format!("move: {}", stringify_err(e)))),
+                Err(e) => {
+                    let msg = stringify_err(e);
+                    web_sys::console::warn_1(
+                        &format!("[dict move] backend returned err: {msg}").into(),
+                    );
+                    set_banner.set(Some(format!("move: {msg}")));
+                }
             }
         });
     };
