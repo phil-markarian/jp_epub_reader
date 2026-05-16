@@ -845,28 +845,38 @@ const safeTriggerLookup = (doc, x, y) => {
 
 const triggerLookupAt = (doc, x, y) => {
     const range = caretRangeAt(doc, x, y);
-    if (!range) return;
-    const text = extractForwardText(range, LOOKUP_MAX_SCAN_LEN);
-    if (!text) return;
-    // Re-fire of the same string is harmless but wastes IPC; skip.
-    if (window.__JP_LOOKUP_LAST_TEXT === text) {
-        publishPosition(x, y, doc);
+    if (!range) {
+        console.log("[lookup] no caret range at", x, y);
         return;
     }
-    window.__JP_LOOKUP_LAST_TEXT = text;
+    const text = extractForwardText(range, LOOKUP_MAX_SCAN_LEN);
+    if (!text) {
+        console.log("[lookup] empty forward text from range");
+        return;
+    }
     publishPosition(x, y, doc);
+    if (window.__JP_LOOKUP_LAST_TEXT === text) {
+        return; // Already in flight / resolved for this text.
+    }
+    window.__JP_LOOKUP_LAST_TEXT = text;
     const invoker =
         window.__TAURI__?.core?.invoke ?? window.__TAURI_INTERNALS__?.invoke;
-    if (typeof invoker !== "function") return;
+    if (typeof invoker !== "function") {
+        console.warn("[lookup] no tauri invoke available");
+        return;
+    }
+    console.log("[lookup] invoking dict_lookup with", JSON.stringify(text));
     invoker("dict_lookup", { text, maxScanLen: LOOKUP_MAX_SCAN_LEN })
         .then((hits) => {
+            const count = Array.isArray(hits) ? hits.length : 0;
+            console.log(`[lookup] got ${count} hit(s) for`, JSON.stringify(text));
             window.__JP_LOOKUP_RESULT = {
                 text,
                 hits: Array.isArray(hits) ? hits : [],
                 at: Date.now(),
             };
         })
-        .catch((e) => console.warn("[lookup] failed", e));
+        .catch((e) => console.warn("[lookup] dict_lookup failed", e));
 };
 
 /**
