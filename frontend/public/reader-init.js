@@ -817,7 +817,14 @@ const attachLookupHover = (doc) => {
         doc.__jpLookupAttached = true;
         let last = 0;
         doc.addEventListener("mousemove", (ev) => {
-            if (!ev.shiftKey) return;
+            if (!ev.shiftKey) {
+                // Released or never held — dismiss the popup. The
+                // popup polls this global; clearing both result
+                // and last-text lets the next Shift+hover trigger
+                // fresh.
+                clearLookup();
+                return;
+            }
             const now = Date.now();
             if (now - last < LOOKUP_THROTTLE_MS) return;
             last = now;
@@ -829,10 +836,28 @@ const attachLookupHover = (doc) => {
             if (!ev.shiftKey) return;
             safeTriggerLookup(doc, ev.clientX, ev.clientY);
         });
+        // Dismiss on Shift release as soon as the key event fires
+        // (mousemove fallback above catches the case where the
+        // cursor leaves the doc entirely before the key release).
+        const onKeyUp = (ev) => {
+            if (ev.key === "Shift") clearLookup();
+        };
+        doc.addEventListener("keyup", onKeyUp);
+        doc.defaultView?.addEventListener?.("keyup", onKeyUp);
+        // Also wire on the OUTER window so Shift release while focus
+        // is in our chrome (toolbar, sidebar) still dismisses.
+        window.addEventListener("keyup", onKeyUp);
         console.log("[lookup] hover attached on iframe doc");
     } catch (e) {
         console.warn("[lookup] attachLookupHover failed", e);
     }
+};
+
+const clearLookup = () => {
+    if (window.__JP_LOOKUP_RESULT) {
+        window.__JP_LOOKUP_RESULT = null;
+    }
+    window.__JP_LOOKUP_LAST_TEXT = null;
 };
 
 const safeTriggerLookup = (doc, x, y) => {
@@ -845,31 +870,19 @@ const safeTriggerLookup = (doc, x, y) => {
 
 const triggerLookupAt = (doc, x, y) => {
     const range = caretRangeAt(doc, x, y);
-    if (!range) {
-        console.log("[lookup] no caret range at", x, y);
-        return;
-    }
+    if (!range) return;
     const text = extractForwardText(range, LOOKUP_MAX_SCAN_LEN);
-    if (!text) {
-        console.log("[lookup] empty forward text from range");
-        return;
-    }
+    if (!text) return;
     publishPosition(x, y, doc);
     if (window.__JP_LOOKUP_LAST_TEXT === text) {
-        return; // Already in flight / resolved for this text.
+        return;
     }
     window.__JP_LOOKUP_LAST_TEXT = text;
     const invoker =
         window.__TAURI__?.core?.invoke ?? window.__TAURI_INTERNALS__?.invoke;
-    if (typeof invoker !== "function") {
-        console.warn("[lookup] no tauri invoke available");
-        return;
-    }
-    console.log("[lookup] invoking dict_lookup with", JSON.stringify(text));
+    if (typeof invoker !== "function") return;
     invoker("dict_lookup", { text, maxScanLen: LOOKUP_MAX_SCAN_LEN })
         .then((hits) => {
-            const count = Array.isArray(hits) ? hits.length : 0;
-            console.log(`[lookup] got ${count} hit(s) for`, JSON.stringify(text));
             window.__JP_LOOKUP_RESULT = {
                 text,
                 hits: Array.isArray(hits) ? hits : [],

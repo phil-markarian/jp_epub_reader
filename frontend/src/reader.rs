@@ -1342,47 +1342,9 @@ fn LookupPopup() -> impl IntoView {
             }
             let hits_js = js_sys::Reflect::get(&res, &JsValue::from_str("hits"))
                 .unwrap_or(JsValue::NULL);
-            // Try the strict decode first; on failure log and try a
-            // looser path via JSON.stringify→serde_json so we can
-            // see what shape actually came back.
             let hits: Vec<LookupHit> =
-                match serde_wasm_bindgen::from_value::<Vec<LookupHit>>(hits_js.clone()) {
-                    Ok(v) => {
-                        web_sys::console::log_1(
-                            &format!("[lookup-popup] decoded {} hit(s)", v.len()).into(),
-                        );
-                        v
-                    }
-                    Err(e) => {
-                        web_sys::console::warn_1(
-                            &format!("[lookup-popup] strict decode failed: {e:?}").into(),
-                        );
-                        // Round-trip via JSON to see the shape and try
-                        // serde_json which is more permissive.
-                        let json_str = js_sys::JSON::stringify(&hits_js)
-                            .ok()
-                            .and_then(|s| s.as_string())
-                            .unwrap_or_default();
-                        web_sys::console::log_1(
-                            &format!(
-                                "[lookup-popup] raw hits json (truncated): {}",
-                                &json_str.chars().take(400).collect::<String>()
-                            )
-                            .into(),
-                        );
-                        serde_json::from_str(&json_str).unwrap_or_default()
-                    }
-                };
+                serde_wasm_bindgen::from_value(hits_js).unwrap_or_default();
             let next_visible = !hits.is_empty();
-            web_sys::console::log_1(
-                &format!(
-                    "[lookup-popup] state update: text='{}' hits={} visible={}",
-                    text,
-                    hits.len(),
-                    next_visible
-                )
-                .into(),
-            );
             set_state.set(LookupState {
                 hits,
                 text,
@@ -1405,31 +1367,20 @@ fn LookupPopup() -> impl IntoView {
             if !visible.get() {
                 return view! { <span></span> }.into_any();
             }
-            let LookupState { hits, text, .. } = state.get();
+            let LookupState { hits, .. } = state.get();
             let (x, y) = pos.get();
-            // TEMP: log every render with the coords + hit count so
-            // we can confirm the DOM update is firing even when the
-            // popup is invisible. + override styles inline so theme
-            // / stacking issues can't make it disappear.
-            web_sys::console::log_1(
-                &format!(
-                    "[lookup-popup] render: x={x} y={y} hits={} text='{text}'",
-                    hits.len()
-                )
-                .into(),
-            );
-            let style = format!(
-                "left: {}px; top: {}px; background: #fef08a; color: #111; \
-                 border: 2px solid #b45309; z-index: 2147483647; \
-                 position: fixed; min-width: 280px; max-width: 420px; \
-                 padding: 12px; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);",
-                (x + 16.0).max(8.0),
-                (y + 16.0).max(8.0)
-            );
+            // Show only the substring the FIRST (longest, highest-
+            // ranked) hit matched — that's the actual "word" the
+            // user is looking at, not our 16-char scan window.
+            let headline = hits
+                .first()
+                .map(|h| h.source.clone())
+                .unwrap_or_default();
+            let style = popup_placement_style(x, y);
             view! {
                 <div class="lookup-popup" style=style>
                     <div class="lookup-popup-source">
-                        <strong>{text}</strong>
+                        <strong>{headline}</strong>
                     </div>
                     <ul class="lookup-popup-hits">
                         {hits.into_iter().take(8).map(|h| view! {
@@ -1471,6 +1422,53 @@ fn LookupPopup() -> impl IntoView {
             }.into_any()
         }}
     }
+}
+
+/// Pick an `inline` style for the popup that keeps it inside the
+/// viewport. Tries the standard "16px down-right of cursor" first;
+/// flips to the left if the popup would overflow the right edge,
+/// and clamps the top so the bottom doesn't fall off either.
+/// Estimates the popup's width / height conservatively since we
+/// don't measure the rendered DOM before paint.
+fn popup_placement_style(x: f64, y: f64) -> String {
+    const POPUP_W: f64 = 380.0;
+    const POPUP_H: f64 = 360.0;
+    const GAP: f64 = 16.0;
+    const EDGE: f64 = 8.0;
+
+    let (vw, vh) = web_sys::window()
+        .map(|w| {
+            let vw = w.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(1024.0);
+            let vh = w.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(768.0);
+            (vw, vh)
+        })
+        .unwrap_or((1024.0, 768.0));
+
+    // Horizontal: prefer right of cursor; flip left if it'd overflow.
+    let right_x = x + GAP;
+    let left_x = x - GAP - POPUP_W;
+    let left = if right_x + POPUP_W + EDGE <= vw {
+        right_x
+    } else if left_x >= EDGE {
+        left_x
+    } else {
+        (vw - POPUP_W - EDGE).max(EDGE)
+    };
+
+    // Vertical: prefer below cursor; flip above if it'd overflow.
+    let below_y = y + GAP;
+    let above_y = y - GAP - POPUP_H;
+    let top = if below_y + POPUP_H + EDGE <= vh {
+        below_y
+    } else if above_y >= EDGE {
+        above_y
+    } else {
+        // Neither side fits cleanly — pin to viewport top with the
+        // scrollable body soaking up excess content.
+        EDGE
+    };
+
+    format!("left: {left}px; top: {top}px;")
 }
 
 /// Best-effort plain-text rendering of the raw glossary JSON.

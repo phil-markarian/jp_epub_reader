@@ -408,26 +408,27 @@ details[open] > summary::before { transform: rotate(90deg); }
 /* Phase 5.4 — Shift-hover dictionary lookup popup */
 .lookup-popup {
   position: fixed;
-  z-index: 2000;
-  max-width: 380px;
-  min-width: 240px;
-  /* Solid fallback colors (no light-dark() — older WebKit may not
-   * support it, which would leave the popup transparent). The
-   * @media block below overrides for dark mode. */
+  z-index: 2147483647;
+  width: 380px;
+  max-height: 360px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: #ffffff;
   color: #111111;
-  border: 1px solid rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(0, 0, 0, 0.2);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   padding: 10px 12px;
   font-size: 0.92em;
-  pointer-events: none; /* don't steal Shift-hover from text underneath */
+  /* pointer-events: auto so the user can scroll inside; the
+   * popup auto-dismisses on Shift release anyway. */
+  pointer-events: auto;
 }
 @media (prefers-color-scheme: dark) {
   .lookup-popup {
     background: #1c1c1e;
     color: #e8e8e8;
-    border-color: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.2);
   }
 }
 .lookup-popup-source { margin-bottom: 8px; font-size: 1.05em; }
