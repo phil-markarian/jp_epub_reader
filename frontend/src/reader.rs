@@ -1340,9 +1340,47 @@ fn LookupPopup() -> impl IntoView {
             }
             let hits_js = js_sys::Reflect::get(&res, &JsValue::from_str("hits"))
                 .unwrap_or(JsValue::NULL);
+            // Try the strict decode first; on failure log and try a
+            // looser path via JSON.stringify→serde_json so we can
+            // see what shape actually came back.
             let hits: Vec<LookupHit> =
-                serde_wasm_bindgen::from_value(hits_js).unwrap_or_default();
+                match serde_wasm_bindgen::from_value::<Vec<LookupHit>>(hits_js.clone()) {
+                    Ok(v) => {
+                        web_sys::console::log_1(
+                            &format!("[lookup-popup] decoded {} hit(s)", v.len()).into(),
+                        );
+                        v
+                    }
+                    Err(e) => {
+                        web_sys::console::warn_1(
+                            &format!("[lookup-popup] strict decode failed: {e:?}").into(),
+                        );
+                        // Round-trip via JSON to see the shape and try
+                        // serde_json which is more permissive.
+                        let json_str = js_sys::JSON::stringify(&hits_js)
+                            .ok()
+                            .and_then(|s| s.as_string())
+                            .unwrap_or_default();
+                        web_sys::console::log_1(
+                            &format!(
+                                "[lookup-popup] raw hits json (truncated): {}",
+                                &json_str.chars().take(400).collect::<String>()
+                            )
+                            .into(),
+                        );
+                        serde_json::from_str(&json_str).unwrap_or_default()
+                    }
+                };
             let next_visible = !hits.is_empty();
+            web_sys::console::log_1(
+                &format!(
+                    "[lookup-popup] state update: text='{}' hits={} visible={}",
+                    text,
+                    hits.len(),
+                    next_visible
+                )
+                .into(),
+            );
             set_state.set(LookupState {
                 hits,
                 text,
