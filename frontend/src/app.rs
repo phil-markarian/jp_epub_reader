@@ -422,35 +422,37 @@ fn SourcesPanel(
 
     view! {
         <section class="sources">
-            <h2>"Source"</h2>
-            {move || match status.get() {
-                None => view! { <p>"Loading status…"</p> }.into_any(),
-                Some(s) => {
-                    let mode = s.mode.clone();
-                    let repo = s.repo_path.clone();
-                    let loaded = s.works_loaded;
-                    view! {
-                        <p>
-                            "Mode: " <strong>{mode}</strong>
-                            " · Works loaded: " <strong>{loaded}</strong>
-                        </p>
-                        {repo.map(|p| view! {
-                            <p class="muted">"Local repo: " <code>{p}</code></p>
-                        })}
-                    }.into_any()
-                }
-            }}
+            <details open>
+                <summary><h2 style="display:inline">"Source"</h2></summary>
+                {move || match status.get() {
+                    None => view! { <p>"Loading status…"</p> }.into_any(),
+                    Some(s) => {
+                        let mode = s.mode.clone();
+                        let repo = s.repo_path.clone();
+                        let loaded = s.works_loaded;
+                        view! {
+                            <p>
+                                "Mode: " <strong>{mode}</strong>
+                                " · Works loaded: " <strong>{loaded}</strong>
+                            </p>
+                            {repo.map(|p| view! {
+                                <p class="muted">"Local repo: " <code>{p}</code></p>
+                            })}
+                        }.into_any()
+                    }
+                }}
 
-            <div class="row">
-                <input
-                    type="text"
-                    placeholder="/path/to/aozorabunko_text"
-                    prop:value=move || path_input.get()
-                    on:input=move |ev| set_path_input.set(event_target_value(&ev))
-                />
-                <button type="button" on:click=on_set_path>"Use local repo"</button>
-                <button type="button" on:click=on_clear>"Use remote"</button>
-            </div>
+                <div class="row">
+                    <input
+                        type="text"
+                        placeholder="/path/to/aozorabunko_text"
+                        prop:value=move || path_input.get()
+                        on:input=move |ev| set_path_input.set(event_target_value(&ev))
+                    />
+                    <button type="button" on:click=on_set_path>"Use local repo"</button>
+                    <button type="button" on:click=on_clear>"Use remote"</button>
+                </div>
+            </details>
         </section>
     }
 }

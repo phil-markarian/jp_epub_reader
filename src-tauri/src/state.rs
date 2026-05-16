@@ -36,6 +36,28 @@ impl AppState {
         let db = Arc::new(Db::open(&app_data_dir)?);
         let dict_db = Arc::new(DictDb::open(&app_data_dir)?);
 
+        // Preload the Aozora works cache from disk so the search box
+        // is immediately usable after launch without forcing the user
+        // to hit "Refresh index" first. ensure_index() would
+        // re-validate freshness + (re)download, but we don't want
+        // network during startup; just reuse whatever's already on
+        // disk (refresh_index is still the explicit way to update).
+        let csv_path = app_cache_dir.join("aozora-index.csv");
+        let cached_works = if csv_path.exists() {
+            match jp_importer::aozora::parse_index(&csv_path) {
+                Ok(w) => {
+                    tracing::info!(count = w.len(), "preloaded aozora index from cache");
+                    w
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "aozora cache present but unreadable");
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
         let java = match jp_importer::aozora::java::detect() {
             Ok(j) => {
                 tracing::info!(
@@ -60,7 +82,7 @@ impl AppState {
 
         let state = Self {
             settings: Arc::new(settings),
-            works: Mutex::new(Vec::new()),
+            works: Mutex::new(cached_works),
             app_data_dir,
             app_cache_dir,
             resource_dir,
