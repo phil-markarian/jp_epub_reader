@@ -364,7 +364,21 @@ details[open] > summary::before { transform: rotate(90deg); }
   max-width: 320px;
   white-space: normal;
   overflow-wrap: anywhere;
+  /* Two-line ceiling so a long Rust panic message doesn't double
+   * the row's height vs. its neighbors. The full text is still in
+   * the row's title attribute as a tooltip. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
+
+/* Pin row + status-cell height to the tallest state (Running with
+ * progress bar + numeric label) so transitions between Queued →
+ * Running → Imported don't shift the rest of the table. */
+.dict-queue-table tbody tr.queue-row { height: 52px; }
+.dict-queue-table tbody tr.queue-row td { vertical-align: middle; }
+.dict-queue-table tbody tr.queue-row td:last-child { min-width: 240px; }
 
 /* Per-row import progress bar. Sits below the "Importing…" label
  * while the row is the currently-active import. */
