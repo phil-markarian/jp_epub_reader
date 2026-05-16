@@ -1405,10 +1405,22 @@ fn LookupPopup() -> impl IntoView {
             }
             let LookupState { hits, text, .. } = state.get();
             let (x, y) = pos.get();
-            // Offset down + right so the popup doesn't sit under the
-            // cursor; cap to viewport edges so it stays on screen.
+            // TEMP: log every render with the coords + hit count so
+            // we can confirm the DOM update is firing even when the
+            // popup is invisible. + override styles inline so theme
+            // / stacking issues can't make it disappear.
+            web_sys::console::log_1(
+                &format!(
+                    "[lookup-popup] render: x={x} y={y} hits={} text='{text}'",
+                    hits.len()
+                )
+                .into(),
+            );
             let style = format!(
-                "left: {}px; top: {}px;",
+                "left: {}px; top: {}px; background: #fef08a; color: #111; \
+                 border: 2px solid #b45309; z-index: 2147483647; \
+                 position: fixed; min-width: 280px; max-width: 420px; \
+                 padding: 12px; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);",
                 (x + 16.0).max(8.0),
                 (y + 16.0).max(8.0)
             );
