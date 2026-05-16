@@ -50,6 +50,7 @@ pub fn run() {
             commands::bookmark::delete_bookmark,
             commands::dict::scan_dictionary_folder,
             commands::dict::import_single_dictionary,
+            commands::dict::cancel_dictionary_import,
             commands::dict::list_dictionaries,
             commands::dict::delete_dictionary,
             commands::dict::get_dict_last_folder,

@@ -11,7 +11,27 @@ use jp_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Polled by the per-row insert loops. When the caller flips this to
+/// true mid-import, the transaction drops without commit and every
+/// row written so far is rolled back. Default = never cancelled.
+static NEVER_CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// How often to read the cancel flag while inserting rows. Reads are
+/// cheap but doing it every row would still add up on a million-row
+/// dictionary; once per 256 rows means at most ~10ms of wasted work
+/// after a cancel request.
+const CANCEL_CHECK_EVERY: usize = 256;
+
+fn check_cancel(cancel: &AtomicBool) -> Result<()> {
+    if cancel.load(Ordering::Relaxed) {
+        Err(Error::Other("import cancelled".into()))
+    } else {
+        Ok(())
+    }
+}
 
 /// Per-dictionary import outcome reported back to the caller.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +94,19 @@ impl Db {
     /// touching the existing rows). Returns `Err` for malformed
     /// zips, unsupported format versions, or sqlite errors mid-run.
     pub fn import_zip(&self, zip_path: &Path) -> Result<Option<ImportSummary>> {
+        self.import_zip_with_cancel(zip_path, &NEVER_CANCEL)
+    }
+
+    /// Same as `import_zip` but periodically reads `cancel` and aborts
+    /// the in-flight transaction (rolling back every row written so
+    /// far) when the caller flips it to `true`. Used by the Tauri
+    /// command so the modal's Cancel button can actually stop a
+    /// long-running dict import.
+    pub fn import_zip_with_cancel(
+        &self,
+        zip_path: &Path,
+        cancel: &AtomicBool,
+    ) -> Result<Option<ImportSummary>> {
         let file = std::fs::File::open(zip_path)
             .map_err(|e| Error::Other(format!("open zip {zip_path:?}: {e}")))?;
         let mut archive = zip::ZipArchive::new(file)
@@ -154,22 +187,29 @@ impl Db {
             let dict_id = tx.last_insert_rowid();
 
             for name in &term_files {
+                check_cancel(cancel)?;
                 let rows = parse_bank(&mut archive, name)?;
-                term_count += insert_term_rows(&tx, dict_id, &rows)?;
+                term_count += insert_term_rows(&tx, dict_id, &rows, cancel)?;
             }
             for name in &term_meta_files {
+                check_cancel(cancel)?;
                 let rows = parse_bank(&mut archive, name)?;
-                meta_count += insert_term_meta_rows(&tx, dict_id, &rows)?;
+                meta_count += insert_term_meta_rows(&tx, dict_id, &rows, cancel)?;
             }
             for name in &kanji_files {
+                check_cancel(cancel)?;
                 let rows = parse_bank(&mut archive, name)?;
-                kanji_count += insert_kanji_rows(&tx, dict_id, &rows)?;
+                kanji_count += insert_kanji_rows(&tx, dict_id, &rows, cancel)?;
             }
             for name in &tag_files {
+                check_cancel(cancel)?;
                 let rows = parse_bank(&mut archive, name)?;
-                tag_count += insert_tag_rows(&tx, dict_id, &rows)?;
+                tag_count += insert_tag_rows(&tx, dict_id, &rows, cancel)?;
             }
 
+            // Final check before commit — if the user cancelled while
+            // the last insert was finishing, drop the transaction.
+            check_cancel(cancel)?;
             tx.commit()
                 .map_err(|e| Error::Other(format!("commit tx: {e}")))?;
             Ok(dict_id)
@@ -229,6 +269,7 @@ fn insert_term_rows(
     tx: &rusqlite::Transaction,
     dict_id: i64,
     rows: &[serde_json::Value],
+    cancel: &AtomicBool,
 ) -> Result<usize> {
     // Tuple shape: [expression, reading, pos, rules, score,
     //               glossary_array, sequence, term_tags]
@@ -241,7 +282,10 @@ fn insert_term_rows(
         .map_err(|e| Error::Other(format!("prepare term insert: {e}")))?;
 
     let mut inserted = 0;
-    for row in rows {
+    for (i, row) in rows.iter().enumerate() {
+        if i % CANCEL_CHECK_EVERY == 0 {
+            check_cancel(cancel)?;
+        }
         let arr = match row.as_array() {
             Some(a) if a.len() >= 6 => a,
             _ => continue, // malformed entry — skip rather than abort
@@ -282,6 +326,7 @@ fn insert_term_meta_rows(
     tx: &rusqlite::Transaction,
     dict_id: i64,
     rows: &[serde_json::Value],
+    cancel: &AtomicBool,
 ) -> Result<usize> {
     // Tuple shape: [expression, mode, data]
     let mut stmt = tx
@@ -292,7 +337,10 @@ fn insert_term_meta_rows(
         .map_err(|e| Error::Other(format!("prepare term_meta insert: {e}")))?;
 
     let mut inserted = 0;
-    for row in rows {
+    for (i, row) in rows.iter().enumerate() {
+        if i % CANCEL_CHECK_EVERY == 0 {
+            check_cancel(cancel)?;
+        }
         let arr = match row.as_array() {
             Some(a) if a.len() >= 3 => a,
             _ => continue,
@@ -317,6 +365,7 @@ fn insert_kanji_rows(
     tx: &rusqlite::Transaction,
     dict_id: i64,
     rows: &[serde_json::Value],
+    cancel: &AtomicBool,
 ) -> Result<usize> {
     // Tuple shape: [char, onyomi, kunyomi, tags, meanings_array, stats_obj]
     let mut stmt = tx
@@ -328,7 +377,10 @@ fn insert_kanji_rows(
         .map_err(|e| Error::Other(format!("prepare kanji insert: {e}")))?;
 
     let mut inserted = 0;
-    for row in rows {
+    for (i, row) in rows.iter().enumerate() {
+        if i % CANCEL_CHECK_EVERY == 0 {
+            check_cancel(cancel)?;
+        }
         let arr = match row.as_array() {
             Some(a) if a.len() >= 5 => a,
             _ => continue,
@@ -359,6 +411,7 @@ fn insert_tag_rows(
     tx: &rusqlite::Transaction,
     dict_id: i64,
     rows: &[serde_json::Value],
+    cancel: &AtomicBool,
 ) -> Result<usize> {
     // Tuple shape: [name, category, sort_key, description, score]
     let mut stmt = tx
@@ -370,7 +423,10 @@ fn insert_tag_rows(
         .map_err(|e| Error::Other(format!("prepare tag insert: {e}")))?;
 
     let mut inserted = 0;
-    for row in rows {
+    for (i, row) in rows.iter().enumerate() {
+        if i % CANCEL_CHECK_EVERY == 0 {
+            check_cancel(cancel)?;
+        }
         let arr = match row.as_array() {
             Some(a) if a.len() >= 5 => a,
             _ => continue,

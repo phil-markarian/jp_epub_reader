@@ -11,6 +11,7 @@ use jp_dict::{peek_index, Dictionary, ImportSummary};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use tauri::State;
 
 const SETTING_DICT_LAST_FOLDER: &str = "dict.last_folder";
@@ -161,9 +162,13 @@ pub async fn import_single_dictionary(
     state: State<'_, AppState>,
 ) -> Result<ImportOutcome, String> {
     let db = state.dict_db.clone();
+    let cancel = state.dict_import_cancel.clone();
+    // Reset on every call — a stale cancel from a previous run would
+    // otherwise abort the first row of every subsequent import.
+    cancel.store(false, Ordering::Release);
     tokio::task::spawn_blocking(move || -> ImportOutcome {
         let zip_path = PathBuf::from(&path);
-        match db.import_zip(&zip_path) {
+        match db.import_zip_with_cancel(&zip_path, &cancel) {
             Ok(Some(summary)) => ImportOutcome::Imported {
                 path: path.clone(),
                 summary,
@@ -172,14 +177,29 @@ pub async fn import_single_dictionary(
                 path: path.clone(),
                 reason: "already imported".into(),
             },
-            Err(e) => ImportOutcome::Failed {
-                path: path.clone(),
-                error: e.to_string(),
-            },
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("import cancelled") {
+                    ImportOutcome::Skipped {
+                        path: path.clone(),
+                        reason: "cancelled".into(),
+                    }
+                } else {
+                    ImportOutcome::Failed { path: path.clone(), error: msg }
+                }
+            }
         }
     })
     .await
     .map_err(|e| format!("import task failed: {e}"))
+}
+
+/// Flip the cancel flag so the in-flight `import_single_dictionary`
+/// will roll back its transaction and return early. Idempotent; the
+/// flag is reset at the start of the next import call.
+#[tauri::command]
+pub fn cancel_dictionary_import(state: State<'_, AppState>) {
+    state.dict_import_cancel.store(true, Ordering::Release);
 }
 
 #[tauri::command]

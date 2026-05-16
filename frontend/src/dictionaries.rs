@@ -493,7 +493,25 @@ pub fn DictionariesPanel() -> impl IntoView {
                                 </div>
                                 <footer class="dict-modal-footer">
                                     {move || if busy.get() {
-                                        let on_cancel = move |_| cancel_write.set(true);
+                                        let on_cancel = move |_| {
+                                            // 1) Stop the JS-side loop
+                                            //    from queueing more zips.
+                                            cancel_write.set(true);
+                                            // 2) Tell the backend to
+                                            //    abort the in-flight
+                                            //    import; the
+                                            //    transaction is
+                                            //    dropped without
+                                            //    commit so already-
+                                            //    written rows are
+                                            //    rolled back.
+                                            spawn_local(async move {
+                                                let _ = invoke(
+                                                    "cancel_dictionary_import",
+                                                    JsValue::from_str("{}"),
+                                                ).await;
+                                            });
+                                        };
                                         view! {
                                             <button
                                                 type="button"
@@ -577,6 +595,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                 <tbody>
                                     {rows.into_iter().map(|r| {
                                         let path_for_check = r.path.clone();
+                                        let path_for_row = r.path.clone();
                                         let path_for_label = r.path.clone();
                                         let ready = r.status == "ready";
                                         let name_or_basename = r.name
@@ -592,22 +611,46 @@ pub fn DictionariesPanel() -> impl IntoView {
                                         let fmt = r.format_version
                                             .map(|f| format!("v{f}"))
                                             .unwrap_or_default();
-                                        let on_check = move |ev: leptos::ev::Event| {
-                                            let checked = leptos::prelude::event_target_checked(&ev);
+                                        let toggle = move |path: String| {
                                             set_selected.update(|s| {
-                                                if checked {
-                                                    s.insert(path_for_check.clone());
+                                                if s.contains(&path) {
+                                                    s.remove(&path);
                                                 } else {
-                                                    s.remove(&path_for_check);
+                                                    s.insert(path);
                                                 }
                                             });
+                                        };
+                                        let toggle_for_row = toggle;
+                                        let toggle_for_check = toggle;
+                                        // Whole row is a click target.
+                                        // Skip if click landed on the
+                                        // checkbox itself — its native
+                                        // change event handles that.
+                                        let on_row_click = move |ev: leptos::ev::MouseEvent| {
+                                            if !ready { return; }
+                                            let target = ev.target()
+                                                .and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+                                            if let Some(el) = target {
+                                                if el.tag_name().eq_ignore_ascii_case("input") {
+                                                    return;
+                                                }
+                                            }
+                                            toggle_for_row(path_for_row.clone());
+                                        };
+                                        let on_check = move |_ev: leptos::ev::Event| {
+                                            toggle_for_check(path_for_check.clone());
                                         };
                                         let is_checked = {
                                             let p = r.path.clone();
                                             move || selected.get().contains(&p)
                                         };
+                                        let row_class = if ready {
+                                            "dict-preview-row"
+                                        } else {
+                                            "dict-preview-row dict-preview-row-disabled"
+                                        };
                                         view! {
-                                            <tr>
+                                            <tr class=row_class on:click=on_row_click>
                                                 <td>
                                                     <input
                                                         type="checkbox"

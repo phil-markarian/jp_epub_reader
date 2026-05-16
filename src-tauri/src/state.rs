@@ -5,6 +5,7 @@ use jp_dict::Db as DictDb;
 use jp_importer::aozora::{AozoraWork, JarPaths, JavaInfo};
 use jp_vocab::Db;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 pub struct AppState {
@@ -22,6 +23,11 @@ pub struct AppState {
     pub db: Arc<Db>,
     /// Yomitan-format dictionary store (dict.sqlite).
     pub dict_db: Arc<DictDb>,
+    /// Flipped to `true` by `cancel_dictionary_import` to abort the
+    /// currently-running zip import inside spawn_blocking. The
+    /// import command resets it to false at the start of every
+    /// invocation so a stale cancel doesn't poison the next one.
+    pub dict_import_cancel: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -90,6 +96,7 @@ impl AppState {
             jars,
             db: db.clone(),
             dict_db,
+            dict_import_cancel: Arc::new(AtomicBool::new(false)),
         };
 
         // Backfill the DB from any pre-Phase-3 imports (meta.json
