@@ -316,29 +316,32 @@ pub fn App() -> impl IntoView {
             {move || banner.get().map(|b| view! { <div class="banner">{b}</div> })}
 
             <section class="search">
-                <div class="row">
-                    <input
-                        type="text"
-                        placeholder="Search title, author, reading…"
-                        prop:value=move || query.get()
-                        on:input=on_query_input
-                    />
-                    <button
-                        type="button"
-                        prop:disabled=move || busy.get()
-                        on:click=on_refresh_index
-                    >
-                        {move || if busy.get() { "Refreshing…" } else { "Refresh index" }}
-                    </button>
-                </div>
-                <label class="row">
-                    <input
-                        type="checkbox"
-                        prop:checked=move || only_public.get()
-                        on:change=on_only_public_change
-                    />
-                    "Public domain only"
-                </label>
+                <details open>
+                    <summary><h2 style="display:inline">"Index"</h2></summary>
+                    <div class="row">
+                        <input
+                            type="text"
+                            placeholder="Search title, author, reading…"
+                            prop:value=move || query.get()
+                            on:input=on_query_input
+                        />
+                        <button
+                            type="button"
+                            prop:disabled=move || busy.get()
+                            on:click=on_refresh_index
+                        >
+                            {move || if busy.get() { "Refreshing…" } else { "Refresh index" }}
+                        </button>
+                    </div>
+                    <label class="row">
+                        <input
+                            type="checkbox"
+                            prop:checked=move || only_public.get()
+                            on:change=on_only_public_change
+                        />
+                        "Public domain only"
+                    </label>
+                </details>
             </section>
 
             <crate::dictionaries::DictionariesPanel />
