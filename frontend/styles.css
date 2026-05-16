@@ -1,4 +1,8 @@
 :root {
+  /* Opt into OS-driven dark/light so the `light-dark()` color
+   * function and the browser's default form-control rendering both
+   * pick up the user's system preference. */
+  color-scheme: light dark;
   font-family: -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN",
     "Yu Gothic", system-ui, Inter, Avenir, Helvetica, Arial, sans-serif;
   font-size: 15px;
@@ -202,8 +206,18 @@ details[open] > summary::before { transform: rotate(90deg); }
 .dict-installed-table thead th {
   position: sticky;
   top: 0;
-  background: var(--reader-bg, #fff);
+  /* Match the page background so the sticky header doesn't look
+   * like a white bar on top of the dark app. light-dark() picks
+   * the right shade automatically when prefers-color-scheme is set. */
+  background: light-dark(#ffffff, #1c1c1e);
   z-index: 1;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.3);
+}
+@supports not (background: light-dark(#fff, #000)) {
+  .dict-installed-table thead th { background: #ffffff; }
+  @media (prefers-color-scheme: dark) {
+    .dict-installed-table thead th { background: #1c1c1e; }
+  }
 }
 .dict-preview { margin: 12px 0; }
 .dict-path {
