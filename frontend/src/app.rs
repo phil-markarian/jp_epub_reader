@@ -162,6 +162,10 @@ pub fn App() -> impl IntoView {
 
     let library_section: NodeRef<html::Details> = NodeRef::new();
     let results_section: NodeRef<html::Details> = NodeRef::new();
+    let index_section: NodeRef<html::Details> = NodeRef::new();
+    crate::collapsible::persist_collapse(library_section, "library");
+    crate::collapsible::persist_collapse(results_section, "results");
+    crate::collapsible::persist_collapse(index_section, "index");
 
     Effect::new(move |_| {
         // Wait until both sections have mounted.
@@ -324,7 +328,7 @@ pub fn App() -> impl IntoView {
             />
 
             <section class="search">
-                <details open>
+                <details open node_ref=index_section>
                     <summary><h2 style="display:inline">"Index"</h2></summary>
                     <div class="row">
                         <input
@@ -425,9 +429,11 @@ fn SourcesPanel(
         });
     };
 
+    let source_section: NodeRef<html::Details> = NodeRef::new();
+    crate::collapsible::persist_collapse(source_section, "source");
     view! {
         <section class="sources">
-            <details open>
+            <details open node_ref=source_section>
                 <summary><h2 style="display:inline">"Source"</h2></summary>
                 {move || match status.get() {
                     None => view! { <p>"Loading status…"</p> }.into_any(),

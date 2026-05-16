@@ -1,4 +1,5 @@
 mod app;
+mod collapsible;
 mod dictionaries;
 mod reader;
 

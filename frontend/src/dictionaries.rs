@@ -394,9 +394,11 @@ pub fn DictionariesPanel() -> impl IntoView {
         set_counts.set((0, 0, 0, 0, 0));
     };
 
+    let dict_section: NodeRef<leptos::html::Details> = NodeRef::new();
+    crate::collapsible::persist_collapse(dict_section, "dictionaries");
     view! {
         <section class="dictionaries">
-            <details open>
+            <details open node_ref=dict_section>
                 <summary><h2 style="display:inline">"Dictionaries"</h2></summary>
                 <div class="row">
                     <button
