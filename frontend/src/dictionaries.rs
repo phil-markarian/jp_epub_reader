@@ -489,9 +489,6 @@ pub fn DictionariesPanel() -> impl IntoView {
     // re-run the scan against the source folder so the rows for
     // the moved-away zips disappear from the preview.
     let move_zips_to_picked_dir = move |paths: Vec<String>| {
-        web_sys::console::log_1(
-            &format!("[dict move] handler entered with {} path(s)", paths.len()).into(),
-        );
         if paths.is_empty() {
             set_banner.set(Some("Nothing to move (no problematic zips).".into()));
             return;
@@ -503,22 +500,16 @@ pub fn DictionariesPanel() -> impl IntoView {
                 &JsValue::from_str("directory"),
                 &JsValue::from_bool(true),
             );
-            web_sys::console::log_1(&"[dict move] opening dialog…".into());
             let picked = match open(opts.into()).await {
                 Ok(v) => v,
                 Err(e) => {
-                    let msg = stringify_err(e);
-                    web_sys::console::warn_1(&format!("[dict move] dialog err: {msg}").into());
-                    set_banner.set(Some(format!("dialog: {msg}")));
+                    set_banner.set(Some(format!("dialog: {}", stringify_err(e))));
                     return;
                 }
             };
-            web_sys::console::log_1(&"[dict move] dialog returned".into());
             let Some(dir) = picked.as_string() else {
-                web_sys::console::log_1(&"[dict move] user cancelled".into());
                 return;
             };
-            web_sys::console::log_1(&format!("[dict move] target: {dir}").into());
 
             let args = js_sys::Object::new();
             let arr = js_sys::Array::new();
@@ -531,16 +522,10 @@ pub fn DictionariesPanel() -> impl IntoView {
                 &JsValue::from_str("targetDir"),
                 &JsValue::from_str(&dir),
             );
-            web_sys::console::log_1(&"[dict move] invoking move_dictionary_zips…".into());
-            let result = invoke("move_dictionary_zips", args.into()).await;
-            web_sys::console::log_1(&"[dict move] invoke resolved".into());
-            match result {
+            match invoke("move_dictionary_zips", args.into()).await {
                 Ok(v) => {
                     let arr = js_sys::Array::from(&v);
                     let total = arr.length() as usize;
-                    web_sys::console::log_1(
-                        &format!("[dict move] backend returned {total} outcome(s)").into(),
-                    );
                     let mut moved = 0usize;
                     let mut failed_msgs: Vec<String> = Vec::new();
                     for i in 0..arr.length() {
@@ -550,13 +535,6 @@ pub fn DictionariesPanel() -> impl IntoView {
                             .and_then(|x| x.as_string())
                             .unwrap_or_default();
                         if kind == "moved" {
-                            let to = js_sys::Reflect::get(&entry, &JsValue::from_str("to"))
-                                .ok()
-                                .and_then(|x| x.as_string())
-                                .unwrap_or_default();
-                            web_sys::console::log_1(
-                                &format!("[dict move] moved to {to}").into(),
-                            );
                             moved += 1;
                         } else {
                             let from = js_sys::Reflect::get(&entry, &JsValue::from_str("from"))
