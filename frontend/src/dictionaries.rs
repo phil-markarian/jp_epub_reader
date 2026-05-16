@@ -686,10 +686,20 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                                         } else { 0.0 };
                                                                         Some((pct, cur, tot))
                                                                     } else { None };
+                                                                    // While running, replace the
+                                                                    // "Importing…" pulse with just
+                                                                    // the progress bar + numeric
+                                                                    // readout. For other states
+                                                                    // (Queued / Imported / Skipped
+                                                                    // / Failed / Cancelled) keep
+                                                                    // the text badge.
+                                                                    let show_text = bar.is_none();
                                                                     view! {
-                                                                        <span class=format!("queue-status {}", st.css_class())>
-                                                                            {st.label()}
-                                                                        </span>
+                                                                        {show_text.then(|| view! {
+                                                                            <span class=format!("queue-status {}", st.css_class())>
+                                                                                {st.label()}
+                                                                            </span>
+                                                                        })}
                                                                         {bar.map(|(pct, cur, tot)| view! {
                                                                             <div class="queue-row-bar">
                                                                                 <div
