@@ -127,6 +127,10 @@ pub fn DictionariesPanel() -> impl IntoView {
     let (busy, set_busy) = signal::<bool>(false);
     let (scanning, set_scanning) = signal::<bool>(false);
     let (banner, set_banner) = signal::<Option<String>>(None);
+    // Folder currently being scanned / last imported from. Surfaced
+    // next to the "Choose folder…" button so the user can tell
+    // which directory the checklist below corresponds to.
+    let (current_folder, set_current_folder) = signal::<Option<String>>(None);
     // Cancel flag — set by the modal's Cancel button. The import
     // loop reads this at the top of each iteration via get_untracked
     // and bails (marking remaining rows Cancelled) when true.
@@ -153,6 +157,7 @@ pub fn DictionariesPanel() -> impl IntoView {
         set_banner.set(None);
         set_preview.set(Vec::new());
         set_selected.set(std::collections::HashSet::new());
+        set_current_folder.set(Some(path.clone()));
         spawn_local(async move {
             let args = js_sys::Object::new();
             let _ = js_sys::Reflect::set(
@@ -399,8 +404,18 @@ pub fn DictionariesPanel() -> impl IntoView {
                         on:click=on_choose_folder
                         prop:disabled=move || busy.get() || scanning.get()
                     >
-                        {move || if scanning.get() { "Scanning…" } else { "Choose folder…" }}
+                        {move || if current_folder.get().is_some() {
+                            if scanning.get() { "Scanning…" } else { "Change folder…" }
+                        } else if scanning.get() { "Scanning…" } else { "Choose folder…" }}
                     </button>
+                    {move || current_folder.get().map(|p| {
+                        let title_attr = p.clone();
+                        view! {
+                            <span class="muted dict-current-folder" title=title_attr>
+                                "Folder: " <code>{p}</code>
+                            </span>
+                        }
+                    })}
                 </div>
                 {move || banner.get().map(|b| view! { <div class="banner">{b}</div> })}
 
