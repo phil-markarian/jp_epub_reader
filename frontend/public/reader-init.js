@@ -811,45 +811,68 @@ const attachKeyNav = (target) => {
 const LOOKUP_MAX_SCAN_LEN = 16;
 const LOOKUP_THROTTLE_MS = 80;
 
+/**
+ * Pixel radius around the last Shift+lookup point. While the cursor
+ * stays inside this circle, the popup persists — so the user can
+ * release Shift and still scroll/read the popup body. Once the
+ * cursor moves further away (typically onto a different paragraph
+ * or off the text entirely), the popup dismisses.
+ * Popup width is 380 + the user usually wants the popup to stay
+ * while they read it, so 280 covers the typical word neighborhood
+ * without being so tight that small mouse jitter closes it.
+ */
+const LOOKUP_DISMISS_RADIUS = 280;
+
 const attachLookupHover = (doc) => {
     try {
         if (!doc || doc.__jpLookupAttached) return;
         doc.__jpLookupAttached = true;
         let last = 0;
         doc.addEventListener("mousemove", (ev) => {
-            if (!ev.shiftKey) {
-                // Released or never held — dismiss the popup. The
-                // popup polls this global; clearing both result
-                // and last-text lets the next Shift+hover trigger
-                // fresh.
-                clearLookup();
-                return;
+            if (ev.shiftKey) {
+                // Throttled Shift+hover triggers a fresh lookup —
+                // moving to a new word with Shift held swaps the
+                // popup content.
+                const now = Date.now();
+                if (now - last < LOOKUP_THROTTLE_MS) return;
+                last = now;
+                safeTriggerLookup(doc, ev.clientX, ev.clientY);
+            } else {
+                // Shift not held — check whether the cursor has
+                // strayed outside the radius of the active popup's
+                // trigger point, and dismiss if so. Cursor moving
+                // onto the popup itself doesn't fire this listener
+                // (popup is in the outer document, not the iframe).
+                maybeDismissForDistance(doc, ev.clientX, ev.clientY);
             }
-            const now = Date.now();
-            if (now - last < LOOKUP_THROTTLE_MS) return;
-            last = now;
-            safeTriggerLookup(doc, ev.clientX, ev.clientY);
         });
-        // Also fire on Shift-click for trackpads that suppress
-        // mousemove until click.
         doc.addEventListener("click", (ev) => {
             if (!ev.shiftKey) return;
             safeTriggerLookup(doc, ev.clientX, ev.clientY);
         });
-        // Dismiss on Shift release as soon as the key event fires
-        // (mousemove fallback above catches the case where the
-        // cursor leaves the doc entirely before the key release).
-        const onKeyUp = (ev) => {
-            if (ev.key === "Shift") clearLookup();
-        };
-        doc.addEventListener("keyup", onKeyUp);
-        doc.defaultView?.addEventListener?.("keyup", onKeyUp);
-        // Also wire on the OUTER window so Shift release while focus
-        // is in our chrome (toolbar, sidebar) still dismisses.
-        window.addEventListener("keyup", onKeyUp);
         console.log("[lookup] hover attached on iframe doc");
     } catch (e) {
         console.warn("[lookup] attachLookupHover failed", e);
+    }
+};
+
+/**
+ * Compare iframe-local cursor coords to the last published popup
+ * position (in OUTER viewport coords). We translate using the
+ * iframe element's bounding rect.
+ */
+const maybeDismissForDistance = (doc, ix, iy) => {
+    const trigger = window.__JP_LOOKUP_TRIGGER_OUTER;
+    if (!trigger) return;
+    const frame = doc.defaultView?.frameElement;
+    if (!frame) return;
+    const r = frame.getBoundingClientRect();
+    const outerX = ix + r.left;
+    const outerY = iy + r.top;
+    const dx = outerX - trigger.x;
+    const dy = outerY - trigger.y;
+    if (dx * dx + dy * dy > LOOKUP_DISMISS_RADIUS * LOOKUP_DISMISS_RADIUS) {
+        clearLookup();
     }
 };
 
@@ -858,6 +881,7 @@ const clearLookup = () => {
         window.__JP_LOOKUP_RESULT = null;
     }
     window.__JP_LOOKUP_LAST_TEXT = null;
+    window.__JP_LOOKUP_TRIGGER_OUTER = null;
 };
 
 const safeTriggerLookup = (doc, x, y) => {
@@ -974,7 +998,11 @@ const publishPosition = (x, y, doc) => {
         outerX += r.left;
         outerY += r.top;
     }
-    window.__JP_LOOKUP_POSITION = { x: outerX, y: outerY, at: Date.now() };
+    const at = Date.now();
+    window.__JP_LOOKUP_POSITION = { x: outerX, y: outerY, at };
+    // Remembered for the distance-based auto-dismiss; refreshed on
+    // every Shift+hover so each new lookup re-anchors the radius.
+    window.__JP_LOOKUP_TRIGGER_OUTER = { x: outerX, y: outerY, at };
 };
 
 window.__JP_READER = {
