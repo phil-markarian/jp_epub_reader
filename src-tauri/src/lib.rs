@@ -56,6 +56,7 @@ pub fn run() {
             commands::dict::delete_dictionary,
             commands::dict::get_dict_last_folder,
             commands::dict::clear_dict_last_folder,
+            commands::lookup::dict_lookup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

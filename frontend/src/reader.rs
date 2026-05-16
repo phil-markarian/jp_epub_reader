@@ -719,6 +719,7 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                             aria-label="Next page"
                         >"›"</button>
                     })}
+                    <LookupPopup />
                 </div>
 
                 {move || {
@@ -1237,4 +1238,234 @@ fn stringify(v: &JsValue) -> String {
     v.as_string()
         .or_else(|| js_sys::JSON::stringify(v).ok().map(|s| s.into()))
         .unwrap_or_else(|| "unknown error".into())
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Phase 5.4 — dictionary lookup popup
+ *
+ * The Shift-hover scanner in reader-init.js writes results to
+ * window.__JP_LOOKUP_RESULT and the cursor coords to
+ * window.__JP_LOOKUP_POSITION. We poll both at 60 fps (cheap; the
+ * setInterval lives for the panel's lifetime) and render a floating
+ * card pinned to the cursor.
+ *
+ * Defining the popup here (vs a separate module) keeps it in the
+ * same compile unit as the reader component, which is the only
+ * place it's currently used. If a future feature wants to drive a
+ * lookup popup from a different window we can extract it.
+ * ────────────────────────────────────────────────────────────────── */
+
+#[derive(Clone, Debug, Deserialize)]
+struct LookupEntry {
+    dict_name: String,
+    expression: String,
+    reading: String,
+    #[serde(default)]
+    glossary_json: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct LookupHit {
+    source: String,
+    candidate: String,
+    #[serde(default)]
+    inflection_chain: Vec<String>,
+    entries: Vec<LookupEntry>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct LookupState {
+    hits: Vec<LookupHit>,
+    text: String,
+    /// Bumped every time the popup-position changes so the Effect
+    /// driving placement re-runs on each cursor move.
+    nonce: u64,
+}
+
+#[component]
+fn LookupPopup() -> impl IntoView {
+    let (state, set_state) = signal::<LookupState>(LookupState::default());
+    let (pos, set_pos) = signal::<(f64, f64)>((0.0, 0.0));
+    let (visible, set_visible) = signal::<bool>(false);
+
+    // Poll the globals at ~30Hz. Cheap and avoids needing a custom
+    // pub/sub bridge between JS and wasm — both sides just touch
+    // window globals.
+    Effect::new(move |_| {
+        let cb = Closure::wrap(Box::new(move || {
+            let window = match web_sys::window() {
+                Some(w) => w,
+                None => return,
+            };
+            // Position.
+            let pos_obj = js_sys::Reflect::get(&window, &JsValue::from_str("__JP_LOOKUP_POSITION"))
+                .unwrap_or(JsValue::NULL);
+            if !pos_obj.is_null() && !pos_obj.is_undefined() {
+                let x = js_sys::Reflect::get(&pos_obj, &JsValue::from_str("x"))
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                let y = js_sys::Reflect::get(&pos_obj, &JsValue::from_str("y"))
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                let cur = pos.get_untracked();
+                if (cur.0 - x).abs() > 0.5 || (cur.1 - y).abs() > 0.5 {
+                    set_pos.set((x, y));
+                }
+            }
+            // Result.
+            let res = js_sys::Reflect::get(&window, &JsValue::from_str("__JP_LOOKUP_RESULT"))
+                .unwrap_or(JsValue::NULL);
+            if res.is_null() || res.is_undefined() {
+                if visible.get_untracked() {
+                    set_visible.set(false);
+                }
+                return;
+            }
+            let text = js_sys::Reflect::get(&res, &JsValue::from_str("text"))
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_default();
+            let last = state.get_untracked();
+            if text == last.text && !last.hits.is_empty() {
+                if !visible.get_untracked() {
+                    set_visible.set(true);
+                }
+                return;
+            }
+            let hits_js = js_sys::Reflect::get(&res, &JsValue::from_str("hits"))
+                .unwrap_or(JsValue::NULL);
+            let hits: Vec<LookupHit> =
+                serde_wasm_bindgen::from_value(hits_js).unwrap_or_default();
+            let next_visible = !hits.is_empty();
+            set_state.set(LookupState {
+                hits,
+                text,
+                nonce: last.nonce.wrapping_add(1),
+            });
+            set_visible.set(next_visible);
+        }) as Box<dyn FnMut()>);
+        if let Some(win) = web_sys::window() {
+            let _ = win.set_interval_with_callback_and_timeout_and_arguments_0(
+                cb.as_ref().unchecked_ref(),
+                33,
+            );
+        }
+        // Leak — the popup lives for the reader window's lifetime.
+        cb.forget();
+    });
+
+    view! {
+        {move || {
+            if !visible.get() {
+                return view! { <span></span> }.into_any();
+            }
+            let LookupState { hits, text, .. } = state.get();
+            let (x, y) = pos.get();
+            // Offset down + right so the popup doesn't sit under the
+            // cursor; cap to viewport edges so it stays on screen.
+            let style = format!(
+                "left: {}px; top: {}px;",
+                (x + 16.0).max(8.0),
+                (y + 16.0).max(8.0)
+            );
+            view! {
+                <div class="lookup-popup" style=style>
+                    <div class="lookup-popup-source">
+                        <strong>{text}</strong>
+                    </div>
+                    <ul class="lookup-popup-hits">
+                        {hits.into_iter().take(8).map(|h| view! {
+                            <li class="lookup-hit">
+                                <div class="lookup-hit-head">
+                                    <span class="lookup-hit-word">{h.candidate.clone()}</span>
+                                    {(!h.entries.is_empty() && !h.entries[0].reading.is_empty())
+                                        .then(|| view! {
+                                            <span class="lookup-hit-reading muted">
+                                                {h.entries[0].reading.clone()}
+                                            </span>
+                                        })}
+                                    {(!h.inflection_chain.is_empty()).then(|| view! {
+                                        <span class="lookup-hit-chain muted">
+                                            {format!("← {}", h.inflection_chain.join(" ← "))}
+                                        </span>
+                                    })}
+                                </div>
+                                <ul class="lookup-hit-entries">
+                                    {h.entries.into_iter().take(3).map(|e| {
+                                        let gloss = simplify_glossary(&e.glossary_json);
+                                        view! {
+                                            <li class="lookup-entry">
+                                                <span class="lookup-entry-dict muted">
+                                                    {e.dict_name}
+                                                </span>
+                                                <span class="lookup-entry-gloss">{gloss}</span>
+                                            </li>
+                                        }
+                                    }).collect_view()}
+                                </ul>
+                            </li>
+                        }).collect_view()}
+                    </ul>
+                    <div class="lookup-popup-hint muted">
+                        "Shift + hover to look up. Release to dismiss."
+                    </div>
+                </div>
+            }.into_any()
+        }}
+    }
+}
+
+/// Best-effort plain-text rendering of the raw glossary JSON.
+/// Yomitan format 3 gloss arrays contain a mix of strings and
+/// `structured-content` objects; for the MVP popup we extract just
+/// the leaf text content and join with " / ". Full structured-content
+/// rendering is a Phase 5.5 follow-on.
+fn simplify_glossary(json: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return json.chars().take(120).collect();
+    };
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(arr) = value.as_array() {
+        for v in arr.iter().take(6) {
+            let s = leaf_text(v);
+            if !s.is_empty() {
+                parts.push(s);
+            }
+        }
+    } else {
+        parts.push(leaf_text(&value));
+    }
+    let joined = parts.join(" / ");
+    if joined.len() > 240 {
+        let trunc: String = joined.chars().take(240).collect();
+        format!("{trunc}…")
+    } else {
+        joined
+    }
+}
+
+fn leaf_text(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Object(map) => {
+            // Yomitan structured-content shape: { type, content,
+            // text, … }. Prefer "text" then "content".
+            if let Some(serde_json::Value::String(s)) = map.get("text") {
+                return s.clone();
+            }
+            if let Some(c) = map.get("content") {
+                return leaf_text(c);
+            }
+            String::new()
+        }
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .map(leaf_text)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(""),
+        _ => String::new(),
+    }
 }

@@ -793,6 +793,154 @@ const attachKeyNav = (target) => {
     target.addEventListener("keydown", onKeyNavInner, { capture: true });
 };
 
+/* ──────────────────────────────────────────────────────────────────────
+ * Shift-hover dictionary lookup
+ *
+ * Mirrors Yomitan's scanner pattern: when the user holds Shift and
+ * moves the cursor over text inside the foliate iframe, we resolve the
+ * text node + offset under the cursor, slice up to LOOKUP_MAX_SCAN_LEN
+ * characters of forward text, and ask the backend's dict_lookup
+ * command for ranked hits. The result + click position are written to
+ * window.__JP_LOOKUP_RESULT, which the Leptos popup component
+ * subscribes to via a polling Effect (cheap — same callback pattern as
+ * the chapter tracker).
+ *
+ * Throttled to one lookup per 80ms so a sweep across a sentence
+ * doesn't fire dozens of IPC roundtrips.
+ * ────────────────────────────────────────────────────────────────── */
+const LOOKUP_MAX_SCAN_LEN = 16;
+const LOOKUP_THROTTLE_MS = 80;
+
+const attachLookupHover = (doc) => {
+    if (!doc || doc.__jpLookupAttached) return;
+    doc.__jpLookupAttached = true;
+    let last = 0;
+    doc.addEventListener("mousemove", (ev) => {
+        if (!ev.shiftKey) return;
+        const now = Date.now();
+        if (now - last < LOOKUP_THROTTLE_MS) return;
+        last = now;
+        triggerLookupAt(doc, ev.clientX, ev.clientY);
+    });
+    // Also fire on Shift-click so users on trackpads that suppress
+    // mousemove until click can still trigger explicitly.
+    doc.addEventListener("click", (ev) => {
+        if (!ev.shiftKey) return;
+        triggerLookupAt(doc, ev.clientX, ev.clientY);
+    });
+};
+
+const triggerLookupAt = (doc, x, y) => {
+    const range = caretRangeAt(doc, x, y);
+    if (!range) return;
+    const text = extractForwardText(range, LOOKUP_MAX_SCAN_LEN);
+    if (!text) return;
+    // Re-fire of the same string is harmless but wastes IPC; skip.
+    if (window.__JP_LOOKUP_LAST_TEXT === text) {
+        publishPosition(x, y, doc);
+        return;
+    }
+    window.__JP_LOOKUP_LAST_TEXT = text;
+    publishPosition(x, y, doc);
+    const invoker =
+        window.__TAURI__?.core?.invoke ?? window.__TAURI_INTERNALS__?.invoke;
+    if (typeof invoker !== "function") return;
+    invoker("dict_lookup", { text, maxScanLen: LOOKUP_MAX_SCAN_LEN })
+        .then((hits) => {
+            window.__JP_LOOKUP_RESULT = {
+                text,
+                hits: Array.isArray(hits) ? hits : [],
+                at: Date.now(),
+            };
+        })
+        .catch((e) => console.warn("[lookup] failed", e));
+};
+
+/**
+ * Best-effort wrapper around the browser's "caret position from
+ * pixel coords" API. Different engines call it different things
+ * and WKWebView only exposes the older `caretRangeFromPoint`.
+ */
+const caretRangeAt = (doc, x, y) => {
+    if (typeof doc.caretRangeFromPoint === "function") {
+        return doc.caretRangeFromPoint(x, y);
+    }
+    if (typeof doc.caretPositionFromPoint === "function") {
+        const p = doc.caretPositionFromPoint(x, y);
+        if (!p) return null;
+        const r = doc.createRange();
+        r.setStart(p.offsetNode, p.offset);
+        r.setEnd(p.offsetNode, p.offset);
+        return r;
+    }
+    return null;
+};
+
+/**
+ * Concatenate up to `maxChars` characters of text starting at the
+ * range's startContainer + startOffset, walking forward through
+ * sibling text nodes when needed. Skips whitespace-only nodes and
+ * `<rt>` ruby annotations (we want the base text, not the
+ * pronunciation gloss).
+ */
+const extractForwardText = (range, maxChars) => {
+    const node = range.startContainer;
+    if (!node) return "";
+    const root = node.ownerDocument?.body;
+    if (!root) return "";
+
+    let collected = "";
+    if (node.nodeType === Node.TEXT_NODE) {
+        collected = node.data.slice(range.startOffset);
+    }
+
+    // Walk forward through the document collecting more text until
+    // we hit the cap. Use a TreeWalker rooted at <body> for speed.
+    const walker = node.ownerDocument.createTreeWalker(
+        root,
+        NodeFilter.SHOW_TEXT,
+        {
+            acceptNode: (n) => {
+                // Skip ruby annotations and CSS-hidden runs.
+                const parent = n.parentElement;
+                if (parent) {
+                    const tag = parent.tagName?.toLowerCase();
+                    if (tag === "rt" || tag === "rp") return NodeFilter.FILTER_REJECT;
+                    if (tag === "script" || tag === "style") return NodeFilter.FILTER_REJECT;
+                }
+                return NodeFilter.FILTER_ACCEPT;
+            },
+        },
+    );
+    // Position the walker at our start node.
+    walker.currentNode = node;
+    // Move past the current node — we've already taken its tail above.
+    let cur = walker.nextNode();
+    while (cur && Array.from(collected).length < maxChars) {
+        collected += cur.data;
+        cur = walker.nextNode();
+    }
+    // Trim to maxChars characters (codepoint-aware).
+    const chars = Array.from(collected);
+    return chars.slice(0, maxChars).join("");
+};
+
+const publishPosition = (x, y, doc) => {
+    // x/y are iframe-local coords. Translate to viewport coords by
+    // adding the iframe element's bounding rect, then up to the
+    // outermost window (in case there's nesting).
+    const win = doc.defaultView;
+    const frame = win?.frameElement;
+    let outerX = x;
+    let outerY = y;
+    if (frame) {
+        const r = frame.getBoundingClientRect();
+        outerX += r.left;
+        outerY += r.top;
+    }
+    window.__JP_LOOKUP_POSITION = { x: outerX, y: outerY, at: Date.now() };
+};
+
 window.__JP_READER = {
     /**
      * @param {HTMLElement} container - element to append the view into
@@ -835,6 +983,7 @@ window.__JP_READER = {
                     captureLayoutFromDoc(doc);
                     attachWheel(doc);
                     attachKeyNav(doc);
+                    attachLookupHover(doc);
                     if (doc.defaultView) {
                         attachWheel(doc.defaultView);
                         attachKeyNav(doc.defaultView);

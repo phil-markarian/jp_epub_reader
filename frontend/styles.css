@@ -404,6 +404,58 @@ details[open] > summary::before { transform: rotate(90deg); }
   font-size: 0.75em;
   margin-top: 2px;
 }
+
+/* Phase 5.4 — Shift-hover dictionary lookup popup */
+.lookup-popup {
+  position: fixed;
+  z-index: 2000;
+  max-width: 380px;
+  min-width: 240px;
+  background: light-dark(#ffffff, #1c1c1e);
+  color: light-dark(#111, #e8e8e8);
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 10px 12px;
+  font-size: 0.92em;
+  pointer-events: none; /* don't steal Shift-hover from text underneath */
+}
+.lookup-popup-source { margin-bottom: 8px; font-size: 1.05em; }
+.lookup-popup-hits { list-style: none; padding: 0; margin: 0; }
+.lookup-hit {
+  border-top: 1px solid rgba(127, 127, 127, 0.18);
+  padding: 6px 0;
+}
+.lookup-hit:first-child { border-top: none; padding-top: 0; }
+.lookup-hit-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+}
+.lookup-hit-word { font-weight: 600; font-size: 1.05em; }
+.lookup-hit-reading { font-size: 0.9em; }
+.lookup-hit-chain { font-size: 0.78em; }
+.lookup-hit-entries { list-style: none; padding: 0; margin: 4px 0 0 0; }
+.lookup-entry {
+  display: flex;
+  gap: 6px;
+  margin: 2px 0;
+  align-items: baseline;
+}
+.lookup-entry-dict {
+  font-size: 0.78em;
+  flex: 0 0 auto;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lookup-entry-gloss { flex: 1 1 auto; }
+.lookup-popup-hint {
+  margin-top: 6px;
+  font-size: 0.75em;
+}
 @keyframes queue-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
