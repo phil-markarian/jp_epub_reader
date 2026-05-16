@@ -51,6 +51,7 @@ pub fn run() {
             commands::dict::scan_dictionary_folder,
             commands::dict::import_single_dictionary,
             commands::dict::cancel_dictionary_import,
+            commands::dict::move_dictionary_zips,
             commands::dict::list_dictionaries,
             commands::dict::delete_dictionary,
             commands::dict::get_dict_last_folder,

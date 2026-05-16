@@ -202,6 +202,84 @@ pub fn cancel_dictionary_import(state: State<'_, AppState>) {
     state.dict_import_cancel.store(true, Ordering::Release);
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum MoveOutcome {
+    Moved { from: String, to: String },
+    Failed { from: String, error: String },
+}
+
+/// Move a set of `.zip` paths into `target_dir`. Tries `rename`
+/// first (cheap when source + target sit on the same volume) and
+/// falls back to copy+delete on cross-volume moves. Names that
+/// already exist in `target_dir` get a `.1`, `.2`, … suffix before
+/// the `.zip` extension so we never overwrite. Returns one outcome
+/// per input path.
+#[tauri::command]
+pub async fn move_dictionary_zips(
+    paths: Vec<String>,
+    target_dir: String,
+) -> Result<Vec<MoveOutcome>, String> {
+    let target = PathBuf::from(&target_dir);
+    if !target.is_dir() {
+        return Err(format!("not a directory: {target_dir}"));
+    }
+
+    tokio::task::spawn_blocking(move || -> Vec<MoveOutcome> {
+        paths
+            .into_iter()
+            .map(|p| move_one_zip(Path::new(&p), &target))
+            .collect()
+    })
+    .await
+    .map_err(|e| format!("move task failed: {e}"))
+}
+
+fn move_one_zip(src: &Path, target_dir: &Path) -> MoveOutcome {
+    let from_display = src.to_string_lossy().to_string();
+    let file_name = match src.file_name().map(|s| s.to_owned()) {
+        Some(n) => n,
+        None => {
+            return MoveOutcome::Failed {
+                from: from_display,
+                error: "source has no file name".into(),
+            };
+        }
+    };
+
+    // Pick a non-colliding destination by adding ".N" before the
+    // .zip suffix until one is free.
+    let mut dest = target_dir.join(&file_name);
+    if dest.exists() {
+        let stem = src.file_stem().map(|s| s.to_owned()).unwrap_or(file_name);
+        for n in 1u32.. {
+            let mut candidate = stem.clone();
+            candidate.push(format!(".{n}"));
+            let with_ext = target_dir.join(&candidate).with_extension("zip");
+            if !with_ext.exists() {
+                dest = with_ext;
+                break;
+            }
+        }
+    }
+
+    let to_display = dest.to_string_lossy().to_string();
+    match std::fs::rename(src, &dest) {
+        Ok(()) => MoveOutcome::Moved { from: from_display, to: to_display },
+        Err(rename_err) => {
+            // Cross-volume rename fails on macOS with EXDEV. Fall
+            // back to copy + delete.
+            match std::fs::copy(src, &dest).and_then(|_| std::fs::remove_file(src)) {
+                Ok(()) => MoveOutcome::Moved { from: from_display, to: to_display },
+                Err(e) => MoveOutcome::Failed {
+                    from: from_display,
+                    error: format!("rename: {rename_err}; copy fallback: {e}"),
+                },
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub fn list_dictionaries(
     state: State<'_, AppState>,

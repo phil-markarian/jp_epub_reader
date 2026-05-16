@@ -414,6 +414,80 @@ pub fn DictionariesPanel() -> impl IntoView {
         set_counts.set((0, 0, 0, 0, 0));
     };
 
+    // Prompt for a target folder, then move the given list of zip
+    // paths into it via `move_dictionary_zips`. Used for both the
+    // preview-side "Move broken/unsupported" button and the
+    // queue-side "Move failed" button. After a successful move we
+    // re-run the scan against the source folder so the rows for
+    // the moved-away zips disappear from the preview.
+    let move_zips_to_picked_dir = move |paths: Vec<String>| {
+        if paths.is_empty() {
+            return;
+        }
+        spawn_local(async move {
+            let opts = js_sys::Object::new();
+            let _ = js_sys::Reflect::set(
+                &opts,
+                &JsValue::from_str("directory"),
+                &JsValue::from_bool(true),
+            );
+            let _ = js_sys::Reflect::set(
+                &opts,
+                &JsValue::from_str("title"),
+                &JsValue::from_str("Move dictionaries to…"),
+            );
+            let picked = match open(opts.into()).await {
+                Ok(v) => v,
+                Err(e) => {
+                    set_banner.set(Some(format!("dialog: {}", stringify_err(e))));
+                    return;
+                }
+            };
+            let Some(dir) = picked.as_string() else { return };
+
+            let args = js_sys::Object::new();
+            let arr = js_sys::Array::new();
+            for p in &paths {
+                arr.push(&JsValue::from_str(p));
+            }
+            let _ = js_sys::Reflect::set(&args, &JsValue::from_str("paths"), &arr);
+            let _ = js_sys::Reflect::set(
+                &args,
+                &JsValue::from_str("targetDir"),
+                &JsValue::from_str(&dir),
+            );
+            match invoke("move_dictionary_zips", args.into()).await {
+                Ok(v) => {
+                    let arr = js_sys::Array::from(&v);
+                    let total = arr.length() as usize;
+                    let mut moved = 0usize;
+                    let mut failed = 0usize;
+                    for i in 0..arr.length() {
+                        let kind = js_sys::Reflect::get(&arr.get(i), &JsValue::from_str("kind"))
+                            .ok()
+                            .and_then(|x| x.as_string())
+                            .unwrap_or_default();
+                        if kind == "moved" {
+                            moved += 1;
+                        } else {
+                            failed += 1;
+                        }
+                    }
+                    set_banner.set(Some(format!(
+                        "Moved {moved} / {total} dictionaries to {dir}{}",
+                        if failed > 0 { format!(" ({failed} failed)") } else { String::new() }
+                    )));
+                    // Re-scan the current dict folder so the moved
+                    // rows drop out of the checklist.
+                    if let Some(p) = current_folder.get_untracked() {
+                        run_scan(p);
+                    }
+                }
+                Err(e) => set_banner.set(Some(format!("move: {}", stringify_err(e)))),
+            }
+        });
+    };
+
     let dict_section: NodeRef<leptos::html::Details> = NodeRef::new();
     crate::collapsible::persist_collapse(dict_section, "dictionaries");
     view! {
@@ -570,7 +644,30 @@ pub fn DictionariesPanel() -> impl IntoView {
                                             </button>
                                         }.into_any()
                                     } else {
+                                        // Gather any rows whose final
+                                        // status is Failed so the user
+                                        // can move them aside in one
+                                        // click.
+                                        let failed_paths: Vec<String> = queue_rows
+                                            .get()
+                                            .iter()
+                                            .filter(|r| r.status.get_untracked() == QueueStatus::Failed)
+                                            .map(|r| r.path.clone())
+                                            .collect();
+                                        let failed_count = failed_paths.len();
                                         view! {
+                                            {(failed_count > 0).then(|| {
+                                                let failed_paths = failed_paths.clone();
+                                                view! {
+                                                    <button
+                                                        type="button"
+                                                        on:click=move |_| move_zips_to_picked_dir(failed_paths.clone())
+                                                        title="Move zips that failed to import out to a separate folder"
+                                                    >
+                                                        {format!("Move failed ({failed_count})…")}
+                                                    </button>
+                                                }
+                                            })}
                                             <button
                                                 type="button"
                                                 on:click=clear_queue
@@ -593,6 +690,12 @@ pub fn DictionariesPanel() -> impl IntoView {
                     }
                     let total = rows.len();
                     let total_ready = rows.iter().filter(|r| r.status == "ready").count();
+                    let bad_paths: Vec<String> = rows
+                        .iter()
+                        .filter(|r| r.status == "broken" || r.status == "unsupported-format")
+                        .map(|r| r.path.clone())
+                        .collect();
+                    let bad_count = bad_paths.len();
                     view! {
                         <div class="dict-preview">
                             <h3>{format!("To be installed ({total_ready} of {total} ready)")}</h3>
@@ -623,6 +726,19 @@ pub fn DictionariesPanel() -> impl IntoView {
                                         }
                                     }}
                                 </button>
+                                {(bad_count > 0).then(|| {
+                                    let bad_paths = bad_paths.clone();
+                                    view! {
+                                        <button
+                                            type="button"
+                                            on:click=move |_| move_zips_to_picked_dir(bad_paths.clone())
+                                            prop:disabled=move || busy.get()
+                                            title="Move broken / unsupported zip files to a folder of your choice"
+                                        >
+                                            {format!("Move problematic ({bad_count})…")}
+                                        </button>
+                                    }
+                                })}
                             </div>
                             <div class="dict-installed-scroll">
                             <table class="dict-table dict-installed-table">
