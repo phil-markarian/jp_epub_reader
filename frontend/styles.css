@@ -204,24 +204,59 @@ details[open] > summary::before { transform: rotate(90deg); }
 }
 .dict-installed-table { margin: 0; }
 
-/* Installed-list controls: enable toggle + reorder arrows */
+/* Installed-list controls: drag handle + enable toggle + reorder
+ * arrows. The row's intrinsic height is set by the text cells; we
+ * size the order column's contents to a max of that height so the
+ * arrow buttons never overflow above or below the row border. */
 .dict-priority-hint { font-size: 0.85em; margin: 4px 0 6px 0; }
-.dict-row-disabled td:nth-child(3) { opacity: 0.45; text-decoration: line-through; }
-.dict-reorder {
+.dict-row-disabled .dict-name-cell { opacity: 0.45; text-decoration: line-through; }
+
+.th-order, .th-on { width: 1%; white-space: nowrap; }
+
+.dict-installed-row { cursor: default; }
+.dict-installed-row[draggable="true"] { /* default cursor on body cells */ }
+
+.dict-order-cell { padding: 4px 6px; vertical-align: middle; }
+.dict-order-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+}
+.dict-grip {
+  cursor: grab;
+  user-select: none;
+  font-size: 0.85em;
+  color: rgba(127, 127, 127, 0.7);
+  letter-spacing: -1px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  line-height: 1;
+}
+.dict-grip:hover { color: rgba(127, 127, 127, 1); background: rgba(127, 127, 127, 0.1); }
+.dict-grip:active { cursor: grabbing; }
+.dict-arrows {
   display: inline-flex;
   flex-direction: column;
+  /* Compact stack — each arrow is just tall enough for the
+   * triangle glyph + a little padding. Together with line-height
+   * 1 this keeps them well inside a 28px-tall row. */
   gap: 1px;
-  width: 22px;
 }
 .dict-arrow {
-  font-size: 0.7em;
-  padding: 0 4px;
-  line-height: 1.1;
+  font-size: 8px;
+  line-height: 1;
+  padding: 1px 4px;
+  min-width: 16px;
+  min-height: 11px;
   cursor: pointer;
   background: transparent;
   border: 1px solid rgba(127, 127, 127, 0.3);
-  border-radius: 3px;
+  border-radius: 2px;
   color: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .dict-arrow:hover:not(:disabled) {
   background: rgba(127, 127, 127, 0.12);

@@ -974,25 +974,23 @@ pub fn DictionariesPanel() -> impl IntoView {
                     } else {
                         let count = rows.len();
                         let last_idx = count.saturating_sub(1);
-                        // Snapshot ids in display order; the reorder
-                        // command takes the full list with the moved
-                        // row swapped to its new neighbor.
                         let ordered_ids: Vec<i64> = rows.iter().map(|d| d.id).collect();
                         view! {
                             <h3>{format!("Installed ({count})")}</h3>
                             <p class="muted dict-priority-hint">
+                                "Drag the grip handle or use the arrows to reorder. "
                                 "Higher in the list = higher priority in the lookup popup. "
-                                "Toggle the checkbox to disable a dictionary without deleting it."
+                                "Toggle the checkbox to disable without deleting."
                             </p>
                             <div class="dict-installed-scroll">
                             <table class="dict-table dict-installed-table">
                                 <thead>
                                     <tr>
-                                        <th>"On"</th>
-                                        <th>""</th>
+                                        <th class="th-order"></th>
+                                        <th class="th-on">"On"</th>
                                         <th>"Name"</th>
                                         <th>"Terms"</th>
-                                        <th>""</th>
+                                        <th></th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -1004,6 +1002,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                         let refresh = refresh;
                                         let ids_for_up = ordered_ids.clone();
                                         let ids_for_down = ordered_ids.clone();
+                                        let ids_for_drag = ordered_ids.clone();
                                         let on_delete = {
                                             let n = name.clone();
                                             move |_| {
@@ -1068,8 +1067,76 @@ pub fn DictionariesPanel() -> impl IntoView {
                                         };
                                         let up_disabled = i == 0;
                                         let down_disabled = i >= last_idx;
+
+                                        // HTML5 drag-and-drop. The
+                                        // source row index lives in
+                                        // dataTransfer as a plain
+                                        // string; the drop target
+                                        // splices the source out of
+                                        // its current position and
+                                        // inserts it at the target's
+                                        // index, then ships the new
+                                        // order.
+                                        let on_drag_start = move |ev: leptos::ev::DragEvent| {
+                                            if let Some(dt) = ev.data_transfer() {
+                                                let _ = dt.set_data("text/plain", &i.to_string());
+                                                dt.set_effect_allowed("move");
+                                            }
+                                        };
+                                        let on_drag_over = move |ev: leptos::ev::DragEvent| {
+                                            // Default prevent so this <tr> is a valid drop target.
+                                            ev.prevent_default();
+                                            if let Some(dt) = ev.data_transfer() {
+                                                dt.set_drop_effect("move");
+                                            }
+                                        };
+                                        let on_drop = move |ev: leptos::ev::DragEvent| {
+                                            ev.prevent_default();
+                                            let from = ev
+                                                .data_transfer()
+                                                .and_then(|dt| dt.get_data("text/plain").ok())
+                                                .and_then(|s| s.parse::<usize>().ok());
+                                            let Some(from) = from else { return };
+                                            if from == i { return }
+                                            let mut next = ids_for_drag.clone();
+                                            let moving = next.remove(from);
+                                            let insert_at = if from < i { i } else { i };
+                                            next.insert(insert_at.min(next.len()), moving);
+                                            spawn_local(async move {
+                                                send_reorder(next).await;
+                                                refresh();
+                                            });
+                                        };
+
                                         view! {
-                                            <tr class=if enabled { "" } else { "dict-row-disabled" }>
+                                            <tr
+                                                class=if enabled { "dict-installed-row" } else { "dict-installed-row dict-row-disabled" }
+                                                draggable="true"
+                                                on:dragstart=on_drag_start
+                                                on:dragover=on_drag_over
+                                                on:drop=on_drop
+                                            >
+                                                <td class="dict-order-cell">
+                                                    <div class="dict-order-controls">
+                                                        <span class="dict-grip" title="Drag to reorder" aria-hidden="true">"⋮⋮"</span>
+                                                        <div class="dict-arrows">
+                                                            <button
+                                                                type="button"
+                                                                class="dict-arrow"
+                                                                title="Move up"
+                                                                prop:disabled=up_disabled
+                                                                on:click=on_move_up
+                                                            >"▲"</button>
+                                                            <button
+                                                                type="button"
+                                                                class="dict-arrow"
+                                                                title="Move down"
+                                                                prop:disabled=down_disabled
+                                                                on:click=on_move_down
+                                                            >"▼"</button>
+                                                        </div>
+                                                    </div>
+                                                </td>
                                                 <td>
                                                     <input
                                                         type="checkbox"
@@ -1077,23 +1144,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                         on:change=on_toggle
                                                     />
                                                 </td>
-                                                <td class="dict-reorder">
-                                                    <button
-                                                        type="button"
-                                                        class="dict-arrow"
-                                                        title="Move up"
-                                                        prop:disabled=up_disabled
-                                                        on:click=on_move_up
-                                                    >"▲"</button>
-                                                    <button
-                                                        type="button"
-                                                        class="dict-arrow"
-                                                        title="Move down"
-                                                        prop:disabled=down_disabled
-                                                        on:click=on_move_down
-                                                    >"▼"</button>
-                                                </td>
-                                                <td>{d.name.clone()}</td>
+                                                <td class="dict-name-cell">{d.name.clone()}</td>
                                                 <td>{tc}</td>
                                                 <td><button type="button" on:click=on_delete>"Delete"</button></td>
                                             </tr>
