@@ -901,7 +901,16 @@ pub fn DictionariesPanel() -> impl IntoView {
                                 })}
                             </div>
                             <div class="dict-installed-scroll dict-sources-scroll">
-                                <details open class="dict-sources-section">
+                                // Auto-expand "To install" only when
+                                // there's at least one ready row;
+                                // otherwise keep it collapsed so the
+                                // panel doesn't show an empty/noisy
+                                // list of broken/unsupported zips
+                                // by default.
+                                <details
+                                    open=total_ready > 0
+                                    class="dict-sources-section"
+                                >
                                     <summary>
                                         <strong>{format!(
                                             "To install ({} ready, {} other)",
