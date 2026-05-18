@@ -263,19 +263,32 @@ details[open] > summary::before { transform: rotate(90deg); }
 }
 .dict-arrow:disabled { opacity: 0.25; cursor: default; }
 
-/* Inline ▸ / ▾ next to the dict name that toggles the details
- * panel beneath the row. */
-.dict-details-toggle {
-  margin-left: 6px;
-  background: transparent;
-  border: none;
-  color: inherit;
-  cursor: pointer;
+/* Whole installed row is a click target — the chevron is just
+ * an indicator, not a button. */
+.dict-installed-row-clickable { cursor: pointer; }
+.dict-installed-row-clickable:hover { background: rgba(127, 127, 127, 0.06); }
+.dict-row-chevron {
+  display: inline-block;
+  width: 12px;
+  margin-right: 6px;
+  opacity: 0.55;
   font-size: 0.85em;
-  opacity: 0.6;
-  padding: 0 4px;
 }
-.dict-details-toggle:hover { opacity: 1; }
+
+/* Sources scroll wrapper holds both the "To install" and
+ * "Already imported" <details> sections so the user can scroll
+ * the whole list without each section getting its own bar. */
+.dict-sources-scroll { padding: 0; }
+.dict-sources-section { padding: 4px 0; border-top: 1px solid rgba(127, 127, 127, 0.15); }
+.dict-sources-section:first-child { border-top: none; }
+.dict-sources-section > summary {
+  cursor: pointer;
+  padding: 8px 12px;
+  list-style: revert;
+  font-size: 0.95em;
+}
+.dict-sources-section > summary:hover { background: rgba(127, 127, 127, 0.06); }
+.dict-sources-section[open] > summary { padding-bottom: 4px; }
 
 .dict-details-row > td { padding: 0; background: rgba(127, 127, 127, 0.05); }
 .dict-details {

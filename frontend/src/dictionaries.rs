@@ -833,16 +833,32 @@ pub fn DictionariesPanel() -> impl IntoView {
                         return view! { <span></span> }.into_any();
                     }
                     let total = rows.len();
-                    let total_ready = rows.iter().filter(|r| r.status == "ready").count();
+                    // Partition the scan into two buckets: things
+                    // that still need importing (ready / unsupported /
+                    // broken) vs. things already in the library. The
+                    // already-imported bucket goes in a collapsed
+                    // <details> so it's out of the way most of the time.
+                    let ready_rows: Vec<DictPreview> = rows
+                        .iter()
+                        .filter(|r| r.status != "already-imported")
+                        .cloned()
+                        .collect();
+                    let already_rows: Vec<DictPreview> = rows
+                        .iter()
+                        .filter(|r| r.status == "already-imported")
+                        .cloned()
+                        .collect();
+                    let total_ready = ready_rows.iter().filter(|r| r.status == "ready").count();
                     let bad_paths: Vec<String> = rows
                         .iter()
                         .filter(|r| r.status == "broken" || r.status == "unsupported-format")
                         .map(|r| r.path.clone())
                         .collect();
                     let bad_count = bad_paths.len();
+                    let already_count = already_rows.len();
                     view! {
                         <div class="dict-preview">
-                            <h3>{format!("To be installed ({total_ready} of {total} ready)")}</h3>
+                            <h3>{format!("Dictionary sources ({} found)", total)}</h3>
                             <div class="row">
                                 <button
                                     type="button"
@@ -884,95 +900,35 @@ pub fn DictionariesPanel() -> impl IntoView {
                                     }
                                 })}
                             </div>
-                            <div class="dict-installed-scroll">
-                            <table class="dict-table dict-installed-table">
-                                <thead>
-                                    <tr>
-                                        <th></th>
-                                        <th>"Name"</th>
-                                        <th>"Status"</th>
-                                        <th>"Format"</th>
-                                        <th>"Path"</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {rows.into_iter().map(|r| {
-                                        let path_for_check = r.path.clone();
-                                        let path_for_row = r.path.clone();
-                                        let path_for_label = r.path.clone();
-                                        let ready = r.status == "ready";
-                                        let name_or_basename = r.name
-                                            .clone()
-                                            .unwrap_or_else(|| basename(&r.path));
-                                        let status_label = match r.status.as_str() {
-                                            "ready" => "Ready",
-                                            "already-imported" => "Already imported",
-                                            "unsupported-format" => "Unsupported format",
-                                            "broken" => "Broken",
-                                            other => other,
-                                        }.to_string();
-                                        let fmt = r.format_version
-                                            .map(|f| format!("v{f}"))
-                                            .unwrap_or_default();
-                                        let toggle = move |path: String| {
-                                            set_selected.update(|s| {
-                                                if s.contains(&path) {
-                                                    s.remove(&path);
-                                                } else {
-                                                    s.insert(path);
-                                                }
-                                            });
-                                        };
-                                        let toggle_for_row = toggle;
-                                        let toggle_for_check = toggle;
-                                        // Whole row is a click target.
-                                        // Skip if click landed on the
-                                        // checkbox itself — its native
-                                        // change event handles that.
-                                        let on_row_click = move |ev: leptos::ev::MouseEvent| {
-                                            if !ready { return; }
-                                            let target = ev.target()
-                                                .and_then(|t| t.dyn_into::<web_sys::Element>().ok());
-                                            if let Some(el) = target {
-                                                if el.tag_name().eq_ignore_ascii_case("input") {
-                                                    return;
-                                                }
-                                            }
-                                            toggle_for_row(path_for_row.clone());
-                                        };
-                                        let on_check = move |_ev: leptos::ev::Event| {
-                                            toggle_for_check(path_for_check.clone());
-                                        };
-                                        let is_checked = {
-                                            let p = r.path.clone();
-                                            move || selected.get().contains(&p)
-                                        };
-                                        let row_class = if ready {
-                                            "dict-preview-row"
-                                        } else {
-                                            "dict-preview-row dict-preview-row-disabled"
-                                        };
-                                        view! {
-                                            <tr class=row_class on:click=on_row_click>
-                                                <td>
-                                                    <input
-                                                        type="checkbox"
-                                                        prop:disabled=!ready
-                                                        prop:checked=is_checked
-                                                        on:change=on_check
-                                                    />
-                                                </td>
-                                                <td>{name_or_basename}</td>
-                                                <td class=move || format!("dict-status dict-status-{}", r.status)>
-                                                    {status_label}
-                                                </td>
-                                                <td class="muted">{fmt}</td>
-                                                <td class="muted dict-path">{basename(&path_for_label)}</td>
-                                            </tr>
-                                        }
-                                    }).collect_view()}
-                                </tbody>
-                            </table>
+                            <div class="dict-installed-scroll dict-sources-scroll">
+                                <details open class="dict-sources-section">
+                                    <summary>
+                                        <strong>{format!(
+                                            "To install ({} ready, {} other)",
+                                            total_ready,
+                                            ready_rows.len().saturating_sub(total_ready),
+                                        )}</strong>
+                                    </summary>
+                                    {render_preview_table(
+                                        ready_rows,
+                                        selected,
+                                        set_selected,
+                                    )}
+                                </details>
+                                {(already_count > 0).then(|| view! {
+                                    <details class="dict-sources-section">
+                                        <summary>
+                                            <strong>{format!(
+                                                "Already imported ({already_count})"
+                                            )}</strong>
+                                        </summary>
+                                        {render_preview_table(
+                                            already_rows,
+                                            selected,
+                                            set_selected,
+                                        )}
+                                    </details>
+                                })}
                             </div>
                         </div>
                     }.into_any()
@@ -1142,15 +1098,43 @@ pub fn DictionariesPanel() -> impl IntoView {
                                             });
                                         };
 
+                                        // Clicking anywhere on the
+                                        // row toggles the details
+                                        // panel — except inside the
+                                        // grip, arrow, checkbox or
+                                        // delete cells, which have
+                                        // their own actions. Detect
+                                        // by walking up from the
+                                        // click target and looking
+                                        // for an .ignore-row-click
+                                        // ancestor.
+                                        let on_row_click = move |ev: leptos::ev::MouseEvent| {
+                                            let target = ev.target()
+                                                .and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+                                            if let Some(el) = target {
+                                                if el.closest(".ignore-row-click")
+                                                    .ok()
+                                                    .flatten()
+                                                    .is_some()
+                                                {
+                                                    return;
+                                                }
+                                            }
+                                            set_details_open.update(|s| {
+                                                if !s.insert(id) { s.remove(&id); }
+                                            });
+                                        };
+
                                         view! {
                                             <tr
-                                                class=if enabled { "dict-installed-row" } else { "dict-installed-row dict-row-disabled" }
+                                                class=if enabled { "dict-installed-row dict-installed-row-clickable" } else { "dict-installed-row dict-installed-row-clickable dict-row-disabled" }
                                                 draggable="true"
                                                 on:dragstart=on_drag_start
                                                 on:dragover=on_drag_over
                                                 on:drop=on_drop
+                                                on:click=on_row_click
                                             >
-                                                <td class="dict-order-cell">
+                                                <td class="dict-order-cell ignore-row-click">
                                                     <div class="dict-order-controls">
                                                         <span class="dict-grip" title="Drag to reorder" aria-hidden="true">"⋮⋮"</span>
                                                         <div class="dict-arrows">
@@ -1171,7 +1155,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                         </div>
                                                     </div>
                                                 </td>
-                                                <td>
+                                                <td class="ignore-row-click">
                                                     <input
                                                         type="checkbox"
                                                         prop:checked=enabled
@@ -1179,24 +1163,15 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                     />
                                                 </td>
                                                 <td class="dict-name-cell">
+                                                    <span class="dict-row-chevron">
+                                                        {move || if details_open.get().contains(&id) { "▾" } else { "▸" }}
+                                                    </span>
                                                     {d.name.clone()}
-                                                    <button
-                                                        type="button"
-                                                        class="dict-details-toggle"
-                                                        title="Show details"
-                                                        on:click=move |_| {
-                                                            set_details_open.update(|s| {
-                                                                if !s.insert(id) { s.remove(&id); }
-                                                            });
-                                                        }
-                                                    >
-                                                        {move || if details_open.get().contains(&id) {
-                                                            "▾"
-                                                        } else { "▸" }}
-                                                    </button>
                                                 </td>
                                                 <td>{tc}</td>
-                                                <td><button type="button" on:click=on_delete>"Delete"</button></td>
+                                                <td class="ignore-row-click">
+                                                    <button type="button" on:click=on_delete>"Delete"</button>
+                                                </td>
                                             </tr>
                                             {move || details_open.get().contains(&id).then(|| {
                                                 let row = dicts.get_untracked()
@@ -1366,6 +1341,101 @@ fn DictDetailsRow(
                 </div>
             </td>
         </tr>
+    }
+}
+
+/// Render the preview rows as a table. Extracted so both the
+/// "To install" and "Already imported" sections can use the same
+/// markup with different row buckets. `selected` is the parent's
+/// signal of paths-checked-for-import; rows whose status isn't
+/// "ready" have their checkbox disabled.
+fn render_preview_table(
+    rows: Vec<DictPreview>,
+    selected: ReadSignal<std::collections::HashSet<String>>,
+    set_selected: WriteSignal<std::collections::HashSet<String>>,
+) -> impl IntoView {
+    view! {
+        <table class="dict-table dict-installed-table">
+            <thead>
+                <tr>
+                    <th></th>
+                    <th>"Name"</th>
+                    <th>"Status"</th>
+                    <th>"Format"</th>
+                    <th>"Path"</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows.into_iter().map(|r| {
+                    let path_for_check = r.path.clone();
+                    let path_for_row = r.path.clone();
+                    let path_for_label = r.path.clone();
+                    let ready = r.status == "ready";
+                    let name_or_basename = r.name
+                        .clone()
+                        .unwrap_or_else(|| basename(&r.path));
+                    let status_label = match r.status.as_str() {
+                        "ready" => "Ready",
+                        "already-imported" => "Already imported",
+                        "unsupported-format" => "Unsupported format",
+                        "broken" => "Broken",
+                        other => other,
+                    }.to_string();
+                    let fmt = r.format_version
+                        .map(|f| format!("v{f}"))
+                        .unwrap_or_default();
+                    let toggle = move |path: String| {
+                        set_selected.update(|s| {
+                            if s.contains(&path) { s.remove(&path); }
+                            else { s.insert(path); }
+                        });
+                    };
+                    let toggle_for_row = toggle;
+                    let toggle_for_check = toggle;
+                    let on_row_click = move |ev: leptos::ev::MouseEvent| {
+                        if !ready { return; }
+                        let target = ev.target()
+                            .and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+                        if let Some(el) = target {
+                            if el.tag_name().eq_ignore_ascii_case("input") {
+                                return;
+                            }
+                        }
+                        toggle_for_row(path_for_row.clone());
+                    };
+                    let on_check = move |_ev: leptos::ev::Event| {
+                        toggle_for_check(path_for_check.clone());
+                    };
+                    let is_checked = {
+                        let p = r.path.clone();
+                        move || selected.get().contains(&p)
+                    };
+                    let row_class = if ready {
+                        "dict-preview-row"
+                    } else {
+                        "dict-preview-row dict-preview-row-disabled"
+                    };
+                    view! {
+                        <tr class=row_class on:click=on_row_click>
+                            <td>
+                                <input
+                                    type="checkbox"
+                                    prop:disabled=!ready
+                                    prop:checked=is_checked
+                                    on:change=on_check
+                                />
+                            </td>
+                            <td>{name_or_basename}</td>
+                            <td class=move || format!("dict-status dict-status-{}", r.status)>
+                                {status_label}
+                            </td>
+                            <td class="muted">{fmt}</td>
+                            <td class="muted dict-path">{basename(&path_for_label)}</td>
+                        </tr>
+                    }
+                }).collect_view()}
+            </tbody>
+        </table>
     }
 }
 
