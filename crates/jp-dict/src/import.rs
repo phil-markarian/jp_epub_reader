@@ -233,11 +233,12 @@ impl Db {
                 .transaction()
                 .map_err(|e| Error::Other(format!("begin tx: {e}")))?;
 
+            let source_path_str = zip_path.to_string_lossy().to_string();
             tx.execute(
                 "INSERT INTO dictionary
                     (name, revision, format_version, priority, enabled, imported_at,
-                     description, attribution, url)
-                 VALUES (?, ?, ?, 0, 1, ?, ?, ?, ?)",
+                     description, attribution, url, source_path)
+                 VALUES (?, ?, ?, 0, 1, ?, ?, ?, ?, ?)",
                 rusqlite::params![
                     index.title,
                     index.revision,
@@ -246,6 +247,7 @@ impl Db {
                     index.description,
                     index.attribution,
                     index.url,
+                    source_path_str,
                 ],
             )
             .map_err(|e| Error::Other(format!("insert dictionary: {e}")))?;

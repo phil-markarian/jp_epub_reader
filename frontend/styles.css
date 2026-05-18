@@ -263,6 +263,45 @@ details[open] > summary::before { transform: rotate(90deg); }
 }
 .dict-arrow:disabled { opacity: 0.25; cursor: default; }
 
+/* Installed-list row action column: reimport ⟳ + delete 🗑 */
+.dict-row-actions {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.dict-icon-btn {
+  background: transparent;
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1em;
+  line-height: 1;
+  padding: 4px 6px;
+  color: inherit;
+  min-width: 28px;
+}
+.dict-icon-btn:hover { background: rgba(127, 127, 127, 0.12); }
+.dict-icon-danger:hover {
+  background: rgba(176, 0, 32, 0.15);
+  border-color: rgba(176, 0, 32, 0.5);
+}
+
+/* "Delete all" lives in the Installed section header. */
+.dict-installed-header { align-items: baseline; margin-top: 12px; }
+.dict-delete-all {
+  background: transparent;
+  border: 1px solid rgba(176, 0, 32, 0.5);
+  color: #b00020;
+  font-weight: 600;
+  font-size: 0.85em;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.dict-delete-all:hover {
+  background: rgba(176, 0, 32, 0.15);
+}
+
 /* Whole installed row is a click target — the chevron is just
  * an indicator, not a button. */
 .dict-installed-row-clickable { cursor: pointer; }

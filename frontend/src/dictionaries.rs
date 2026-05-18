@@ -945,12 +945,52 @@ pub fn DictionariesPanel() -> impl IntoView {
                         let count = rows.len();
                         let last_idx = count.saturating_sub(1);
                         let ordered_ids: Vec<i64> = rows.iter().map(|d| d.id).collect();
+                        let on_delete_all = move |_| {
+                            // Two-click confirm pattern: first click
+                            // arms (banner becomes red "click again to
+                            // confirm"), second click within 5s wipes.
+                            let armed_at = window_now_ms();
+                            let prev = window_get_number("__JP_DICT_DELETE_ALL_AT")
+                                .unwrap_or(0.0);
+                            if armed_at - prev < 5000.0 && prev != 0.0 {
+                                // Confirmed — wipe.
+                                window_set_number("__JP_DICT_DELETE_ALL_AT", 0.0);
+                                spawn_local(async move {
+                                    if let Err(e) =
+                                        invoke("delete_all_dictionaries", JsValue::from_str("{}"))
+                                            .await
+                                    {
+                                        web_sys::console::warn_1(
+                                            &format!("delete all: {}", stringify_err(e)).into(),
+                                        );
+                                    }
+                                    refresh();
+                                });
+                            } else {
+                                window_set_number("__JP_DICT_DELETE_ALL_AT", armed_at);
+                                set_banner.set(Some(
+                                    "Click \"Delete all\" again within 5 seconds to wipe every imported dictionary."
+                                        .into(),
+                                ));
+                            }
+                        };
                         view! {
-                            <h3>{format!("Installed ({count})")}</h3>
+                            <div class="row dict-installed-header">
+                                <h3 style="margin: 0; flex: 1 1 auto;">{format!("Installed ({count})")}</h3>
+                                <button
+                                    type="button"
+                                    class="dict-delete-all"
+                                    on:click=on_delete_all
+                                    title="Delete every imported dictionary (two-click confirm)"
+                                >
+                                    "🗑 Delete all"
+                                </button>
+                            </div>
                             <p class="muted dict-priority-hint">
                                 "Drag the grip handle or use the arrows to reorder. "
                                 "Higher in the list = higher priority in the lookup popup. "
-                                "Toggle the checkbox to disable without deleting."
+                                "Toggle the checkbox to disable without deleting. "
+                                "Click a row to view details & notes."
                             </p>
                             <div class="dict-installed-scroll">
                             <table class="dict-table dict-installed-table">
@@ -988,6 +1028,26 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                         Ok(_) => refresh(),
                                                         Err(e) => web_sys::console::warn_1(
                                                             &format!("delete {n}: {}", stringify_err(e)).into(),
+                                                        ),
+                                                    }
+                                                });
+                                            }
+                                        };
+                                        let on_reimport = {
+                                            let n = name.clone();
+                                            move |_| {
+                                                let n = n.clone();
+                                                spawn_local(async move {
+                                                    let args = js_sys::Object::new();
+                                                    let _ = js_sys::Reflect::set(
+                                                        &args,
+                                                        &JsValue::from_str("id"),
+                                                        &JsValue::from_f64(id as f64),
+                                                    );
+                                                    match invoke("reimport_dictionary", args.into()).await {
+                                                        Ok(_) => refresh(),
+                                                        Err(e) => web_sys::console::warn_1(
+                                                            &format!("reimport {n}: {}", stringify_err(e)).into(),
                                                         ),
                                                     }
                                                 });
@@ -1169,8 +1229,21 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                     {d.name.clone()}
                                                 </td>
                                                 <td>{tc}</td>
-                                                <td class="ignore-row-click">
-                                                    <button type="button" on:click=on_delete>"Delete"</button>
+                                                <td class="ignore-row-click dict-row-actions">
+                                                    <button
+                                                        type="button"
+                                                        class="dict-icon-btn"
+                                                        on:click=on_reimport
+                                                        title="Reimport from source zip"
+                                                        aria-label="Reimport dictionary"
+                                                    >"⟳"</button>
+                                                    <button
+                                                        type="button"
+                                                        class="dict-icon-btn dict-icon-danger"
+                                                        on:click=on_delete
+                                                        title="Delete dictionary"
+                                                        aria-label="Delete dictionary"
+                                                    >"🗑"</button>
                                                 </td>
                                             </tr>
                                             {move || details_open.get().contains(&id).then(|| {
@@ -1436,6 +1509,27 @@ fn render_preview_table(
                 }).collect_view()}
             </tbody>
         </table>
+    }
+}
+
+fn window_now_ms() -> f64 {
+    js_sys::Date::now()
+}
+
+fn window_get_number(key: &str) -> Option<f64> {
+    let win = web_sys::window()?;
+    js_sys::Reflect::get(&win, &JsValue::from_str(key))
+        .ok()
+        .and_then(|v| v.as_f64())
+}
+
+fn window_set_number(key: &str, value: f64) {
+    if let Some(win) = web_sys::window() {
+        let _ = js_sys::Reflect::set(
+            &win,
+            &JsValue::from_str(key),
+            &JsValue::from_f64(value),
+        );
     }
 }
 

@@ -349,6 +349,67 @@ pub fn delete_dictionary(
 }
 
 #[tauri::command]
+pub fn delete_all_dictionaries(state: State<'_, AppState>) -> Result<usize, String> {
+    state.dict_db.delete_all_dictionaries().map_err(|e| e.to_string())
+}
+
+/// Re-run the import for an existing dictionary. We delete the
+/// current row (which CASCADE-drops its terms / kanji / meta /
+/// tags) then re-import from the source_path recorded at the
+/// original import. Returns the new ImportOutcome so the frontend
+/// can show whether the reimport succeeded.
+///
+/// If the dictionary has no source_path (pre-migration v3) we
+/// return an error rather than silently failing — the frontend
+/// should fall back to scanning the saved folder. Future polish
+/// could add that fallback here.
+#[tauri::command]
+pub async fn reimport_dictionary(
+    id: i64,
+    state: State<'_, AppState>,
+) -> Result<ImportOutcome, String> {
+    let db = state.dict_db.clone();
+    let cancel = state.dict_import_cancel.clone();
+    cancel.store(false, Ordering::Release);
+
+    let source_path = db
+        .dictionary_source_path(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            "no source path recorded for this dictionary; \
+             delete and re-import from the folder instead"
+                .to_string()
+        })?;
+
+    tokio::task::spawn_blocking(move || -> ImportOutcome {
+        // Delete first so the existing-name skip doesn't fire.
+        if let Err(e) = db.delete_dictionary(id) {
+            return ImportOutcome::Failed {
+                path: source_path,
+                error: format!("delete existing: {e}"),
+            };
+        }
+        let zip_path = PathBuf::from(&source_path);
+        match db.import_zip_with_cancel(&zip_path, &cancel) {
+            Ok(Some(summary)) => ImportOutcome::Imported {
+                path: source_path,
+                summary,
+            },
+            Ok(None) => ImportOutcome::Skipped {
+                path: source_path,
+                reason: "already imported after delete (race?)".into(),
+            },
+            Err(e) => ImportOutcome::Failed {
+                path: source_path,
+                error: e.to_string(),
+            },
+        }
+    })
+    .await
+    .map_err(|e| format!("reimport task failed: {e}"))
+}
+
+#[tauri::command]
 pub fn set_dictionary_notes(
     id: i64,
     notes: Option<String>,

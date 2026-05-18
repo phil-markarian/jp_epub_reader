@@ -91,6 +91,8 @@ const MIGRATIONS: &[&str] = &[
     // v2 — Phase 5.5: dictionary description / attribution / url /
     //                 user_notes for the details panel
     include_str!("migrations/002_dict_metadata.sql"),
+    // v3 — Phase 5.5: source_path so Reimport can find the zip
+    include_str!("migrations/003_dict_source_path.sql"),
 ];
 
 #[cfg(test)]

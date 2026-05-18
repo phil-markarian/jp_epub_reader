@@ -23,6 +23,11 @@ pub struct Dictionary {
     pub url: Option<String>,
     /// Free-form notes the user types in the details panel.
     pub user_notes: Option<String>,
+    /// On-disk path to the zip we imported this dictionary from,
+    /// captured at import time. Used by the "Reimport" button to
+    /// find the source without rescanning the user's dict folder.
+    /// None for rows imported before migration v3.
+    pub source_path: Option<String>,
 }
 
 impl Db {
@@ -33,7 +38,8 @@ impl Db {
                     "SELECT d.id, d.name, d.revision, d.format_version,
                             d.priority, d.enabled, d.imported_at,
                             (SELECT COUNT(*) FROM term WHERE dict_id = d.id),
-                            d.description, d.attribution, d.url, d.user_notes
+                            d.description, d.attribution, d.url, d.user_notes,
+                            d.source_path
                      FROM dictionary d
                      ORDER BY d.priority DESC, d.imported_at ASC",
                 )
@@ -53,6 +59,7 @@ impl Db {
                         attribution: r.get(9)?,
                         url: r.get(10)?,
                         user_notes: r.get(11)?,
+                        source_path: r.get(12)?,
                     })
                 })
                 .map_err(|e| Error::Other(e.to_string()))?;
@@ -69,6 +76,34 @@ impl Db {
             c.execute("DELETE FROM dictionary WHERE id = ?", rusqlite::params![id])
                 .map_err(|e| Error::Other(format!("delete dictionary: {e}")))?;
             Ok(())
+        })
+    }
+
+    /// Wipe every dictionary. CASCADE drops their terms/kanji/meta/
+    /// tags. Returns the number of rows deleted so the caller can
+    /// confirm.
+    pub fn delete_all_dictionaries(&self) -> Result<usize> {
+        self.with_conn(|c| {
+            let n = c
+                .execute("DELETE FROM dictionary", [])
+                .map_err(|e| Error::Other(format!("delete all: {e}")))?;
+            Ok(n)
+        })
+    }
+
+    /// Return just the on-disk source zip for a single dictionary,
+    /// or None if it has none recorded (pre-migration v3 row, or
+    /// imported through a code path that never set it).
+    pub fn dictionary_source_path(&self, id: i64) -> Result<Option<String>> {
+        self.with_conn(|c| {
+            let path: Option<String> = c
+                .query_row(
+                    "SELECT source_path FROM dictionary WHERE id = ?",
+                    rusqlite::params![id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| Error::Other(format!("source_path: {e}")))?;
+            Ok(path)
         })
     }
 
