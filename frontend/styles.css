@@ -274,33 +274,56 @@ details[open] > summary::before { transform: rotate(90deg); }
   border: 1px solid rgba(127, 127, 127, 0.25);
   border-radius: 4px;
   cursor: pointer;
-  font-size: 1em;
-  line-height: 1;
+  line-height: 0;
   padding: 4px 6px;
   color: inherit;
-  min-width: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .dict-icon-btn:hover { background: rgba(127, 127, 127, 0.12); }
 .dict-icon-danger:hover {
   background: rgba(176, 0, 32, 0.15);
   border-color: rgba(176, 0, 32, 0.5);
 }
+.dict-icon-danger:hover .dict-svg-icon { color: #b00020; }
 
-/* "Delete all" lives in the Installed section header. */
-.dict-installed-header { align-items: baseline; margin-top: 12px; }
-.dict-delete-all {
+/* Reused SVG icon: takes its color from `currentColor` and sizes
+ * from the parent button's font-size, so a single `font-size`
+ * tweak on .dict-icon-btn rescales the icon. */
+.dict-svg-icon {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
+/* Header actions next to "Installed (N)": Reimport all + Delete all. */
+.dict-installed-header { align-items: center; margin-top: 12px; gap: 6px; }
+.dict-header-action {
   background: transparent;
-  border: 1px solid rgba(176, 0, 32, 0.5);
-  color: #b00020;
-  font-weight: 600;
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  color: inherit;
+  font-weight: 500;
   font-size: 0.85em;
-  padding: 4px 10px;
+  padding: 5px 10px;
   border-radius: 4px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1;
 }
-.dict-delete-all:hover {
-  background: rgba(176, 0, 32, 0.15);
+.dict-header-action:hover { background: rgba(127, 127, 127, 0.12); }
+.dict-header-action .dict-svg-icon { width: 12px; height: 12px; }
+
+.dict-delete-all {
+  border-color: rgba(176, 0, 32, 0.5);
+  color: #b00020;
+  font-weight: 600;
 }
+.dict-delete-all:hover { background: rgba(176, 0, 32, 0.15); }
 
 /* Whole installed row is a click target — the chevron is just
  * an indicator, not a button. */

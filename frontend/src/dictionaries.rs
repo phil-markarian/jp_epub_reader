@@ -947,13 +947,12 @@ pub fn DictionariesPanel() -> impl IntoView {
                         let ordered_ids: Vec<i64> = rows.iter().map(|d| d.id).collect();
                         let on_delete_all = move |_| {
                             // Two-click confirm pattern: first click
-                            // arms (banner becomes red "click again to
-                            // confirm"), second click within 5s wipes.
+                            // arms (banner asks for confirmation),
+                            // second click within 5s wipes.
                             let armed_at = window_now_ms();
                             let prev = window_get_number("__JP_DICT_DELETE_ALL_AT")
                                 .unwrap_or(0.0);
                             if armed_at - prev < 5000.0 && prev != 0.0 {
-                                // Confirmed — wipe.
                                 window_set_number("__JP_DICT_DELETE_ALL_AT", 0.0);
                                 spawn_local(async move {
                                     if let Err(e) =
@@ -974,16 +973,61 @@ pub fn DictionariesPanel() -> impl IntoView {
                                 ));
                             }
                         };
+                        let ids_for_reimport_all: Vec<i64> = ordered_ids.clone();
+                        let on_reimport_all = move |_| {
+                            let ids = ids_for_reimport_all.clone();
+                            let total = ids.len();
+                            if total == 0 { return; }
+                            spawn_local(async move {
+                                let mut done = 0usize;
+                                let mut failed = 0usize;
+                                for id in ids {
+                                    set_banner.set(Some(format!(
+                                        "Reimporting {} / {total}…",
+                                        done + 1,
+                                    )));
+                                    let args = js_sys::Object::new();
+                                    let _ = js_sys::Reflect::set(
+                                        &args,
+                                        &JsValue::from_str("id"),
+                                        &JsValue::from_f64(id as f64),
+                                    );
+                                    match invoke("reimport_dictionary", args.into()).await {
+                                        Ok(_) => done += 1,
+                                        Err(e) => {
+                                            failed += 1;
+                                            web_sys::console::warn_1(
+                                                &format!("reimport {id}: {}", stringify_err(e))
+                                                    .into(),
+                                            );
+                                        }
+                                    }
+                                }
+                                set_banner.set(Some(format!(
+                                    "Reimport done: {done} ok, {failed} failed."
+                                )));
+                                refresh();
+                            });
+                        };
                         view! {
                             <div class="row dict-installed-header">
                                 <h3 style="margin: 0; flex: 1 1 auto;">{format!("Installed ({count})")}</h3>
                                 <button
                                     type="button"
-                                    class="dict-delete-all"
+                                    class="dict-header-action"
+                                    on:click=on_reimport_all
+                                    title="Reimport every dictionary from its saved source zip"
+                                >
+                                    <RotateRightIcon />
+                                    " Reimport all"
+                                </button>
+                                <button
+                                    type="button"
+                                    class="dict-header-action dict-delete-all"
                                     on:click=on_delete_all
                                     title="Delete every imported dictionary (two-click confirm)"
                                 >
-                                    "🗑 Delete all"
+                                    "Delete all"
                                 </button>
                             </div>
                             <p class="muted dict-priority-hint">
@@ -1236,14 +1280,18 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                         on:click=on_reimport
                                                         title="Reimport from source zip"
                                                         aria-label="Reimport dictionary"
-                                                    >"⟳"</button>
+                                                    >
+                                                        <RotateRightIcon />
+                                                    </button>
                                                     <button
                                                         type="button"
                                                         class="dict-icon-btn dict-icon-danger"
                                                         on:click=on_delete
                                                         title="Delete dictionary"
                                                         aria-label="Delete dictionary"
-                                                    >"🗑"</button>
+                                                    >
+                                                        <TrashIcon />
+                                                    </button>
                                                 </td>
                                             </tr>
                                             {move || details_open.get().contains(&id).then(|| {
@@ -1514,6 +1562,47 @@ fn render_preview_table(
 
 fn window_now_ms() -> f64 {
     js_sys::Date::now()
+}
+
+/// Font Awesome 6 free `trash-can` (solid). Inlined as SVG so we
+/// don't need to ship the webfont. Sized via the parent button's
+/// font-size so a single CSS rule controls all icons.
+#[component]
+fn TrashIcon() -> impl IntoView {
+    view! {
+        <svg
+            class="dict-svg-icon"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 448 512"
+            aria-hidden="true"
+            focusable="false"
+        >
+            <path
+                fill="currentColor"
+                d="M170.5 51.6L151.5 80h145l-19-28.4c-1.5-2.2-4-3.6-6.7-3.6H177.1c-2.7 0-5.2 1.3-6.7 3.6zm147-26.6L354.2 80H368h48 8c13.3 0 24 10.7 24 24s-10.7 24-24 24h-8V432c0 44.2-35.8 80-80 80H112c-44.2 0-80-35.8-80-80V128H24c-13.3 0-24-10.7-24-24S10.7 80 24 80h8H80 93.8l36.7-55.1C140.9 9.4 158.4 0 177.1 0h93.7c18.7 0 36.2 9.4 46.6 24.9zM80 128V432c0 17.7 14.3 32 32 32H336c17.7 0 32-14.3 32-32V128H80zm80 64V400c0 8.8-7.2 16-16 16s-16-7.2-16-16V192c0-8.8 7.2-16 16-16s16 7.2 16 16zm80 0V400c0 8.8-7.2 16-16 16s-16-7.2-16-16V192c0-8.8 7.2-16 16-16s16 7.2 16 16zm80 0V400c0 8.8-7.2 16-16 16s-16-7.2-16-16V192c0-8.8 7.2-16 16-16s16 7.2 16 16z"
+            />
+        </svg>
+    }
+}
+
+/// Font Awesome 6 free `rotate-right` (solid). Used for per-row
+/// reimport + "Reimport all" header action.
+#[component]
+fn RotateRightIcon() -> impl IntoView {
+    view! {
+        <svg
+            class="dict-svg-icon"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 512 512"
+            aria-hidden="true"
+            focusable="false"
+        >
+            <path
+                fill="currentColor"
+                d="M463.5 224H472c13.3 0 24-10.7 24-24V72c0-9.7-5.8-18.5-14.8-22.2s-19.3-1.7-26.2 5.2L413.4 96.6c-87.6-86.5-228.7-86.2-315.8 1c-87.5 87.5-87.5 229.3 0 316.8s229.3 87.5 316.8 0c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0c-62.5 62.5-163.8 62.5-226.3 0s-62.5-163.8 0-226.3c62.2-62.2 162.7-62.5 225.3-1L327 183c-6.9 6.9-8.9 17.2-5.2 26.2s12.5 14.8 22.2 14.8H463.5z"
+            />
+        </svg>
+    }
 }
 
 fn window_get_number(key: &str) -> Option<f64> {
