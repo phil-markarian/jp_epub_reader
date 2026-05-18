@@ -1049,20 +1049,33 @@ pub fn DictionariesPanel() -> impl IntoView {
                                         };
                                         let on_move_up = move |_| {
                                             if i == 0 { return; }
+                                            // Optimistic: swap the
+                                            // local dicts signal
+                                            // immediately so the row
+                                            // visibly moves without
+                                            // waiting for the IPC
+                                            // roundtrip. send_reorder
+                                            // fires in the background;
+                                            // on failure we re-fetch
+                                            // to restore truth.
+                                            set_dicts.update(|d| {
+                                                if i < d.len() { d.swap(i, i - 1); }
+                                            });
                                             let mut next = ids_for_up.clone();
                                             next.swap(i, i - 1);
                                             spawn_local(async move {
                                                 send_reorder(next).await;
-                                                refresh();
                                             });
                                         };
                                         let on_move_down = move |_| {
                                             if i >= last_idx { return; }
+                                            set_dicts.update(|d| {
+                                                if i + 1 < d.len() { d.swap(i, i + 1); }
+                                            });
                                             let mut next = ids_for_down.clone();
                                             next.swap(i, i + 1);
                                             spawn_local(async move {
                                                 send_reorder(next).await;
-                                                refresh();
                                             });
                                         };
                                         let up_disabled = i == 0;
@@ -1098,13 +1111,20 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                 .and_then(|s| s.parse::<usize>().ok());
                                             let Some(from) = from else { return };
                                             if from == i { return }
+                                            // Optimistic local splice.
+                                            set_dicts.update(|d| {
+                                                if from < d.len() && i < d.len() {
+                                                    let row = d.remove(from);
+                                                    let insert_at = if from < i { i } else { i };
+                                                    d.insert(insert_at.min(d.len()), row);
+                                                }
+                                            });
                                             let mut next = ids_for_drag.clone();
                                             let moving = next.remove(from);
                                             let insert_at = if from < i { i } else { i };
                                             next.insert(insert_at.min(next.len()), moving);
                                             spawn_local(async move {
                                                 send_reorder(next).await;
-                                                refresh();
                                             });
                                         };
 
