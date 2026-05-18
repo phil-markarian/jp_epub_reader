@@ -68,6 +68,14 @@ pub struct IndexPeek {
     pub attribution: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
+    /// How many term_bank_*.json / kanji_bank_*.json /
+    /// term_meta_bank_*.json / tag_bank_*.json files the zip
+    /// contains. Counted by entry name during peek — no parsing.
+    /// A zip with `bank_file_count == 0` carries only metadata and
+    /// can't contribute any lookups, so the scan flags it as
+    /// "empty" instead of "ready".
+    #[serde(default)]
+    pub bank_file_count: u32,
 }
 
 pub fn peek_index(zip_path: &Path) -> Result<IndexPeek> {
