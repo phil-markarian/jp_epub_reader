@@ -849,9 +849,17 @@ pub fn DictionariesPanel() -> impl IntoView {
                         .cloned()
                         .collect();
                     let total_ready = ready_rows.iter().filter(|r| r.status == "ready").count();
+                    // "Problematic" buckets the user can sweep into
+                    // a side folder: broken zips, unsupported format
+                    // versions, and now empty zips (valid format but
+                    // no bank files of any kind).
                     let bad_paths: Vec<String> = rows
                         .iter()
-                        .filter(|r| r.status == "broken" || r.status == "unsupported-format")
+                        .filter(|r| {
+                            r.status == "broken"
+                                || r.status == "unsupported-format"
+                                || r.status == "empty"
+                        })
                         .map(|r| r.path.clone())
                         .collect();
                     let bad_count = bad_paths.len();
@@ -915,12 +923,30 @@ pub fn DictionariesPanel() -> impl IntoView {
                                         set_selected,
                                     )}
                                 </details>
-                                {(already_count > 0).then(|| view! {
+                                {(already_count > 0).then(|| {
+                                    // Note: this count is "zips in
+                                    // the folder whose title matches
+                                    // an already-imported dict" —
+                                    // if the same dict appears in
+                                    // multiple zips (different
+                                    // revisions / repacks), all of
+                                    // them get counted here, so this
+                                    // number can be greater than the
+                                    // number of installed dicts.
+                                    let distinct_count = dicts.get_untracked().len();
+                                    let extra = already_count
+                                        .saturating_sub(distinct_count);
+                                    let label = if extra > 0 {
+                                        format!(
+                                            "Already imported or duplicate ({already_count} zips → {distinct_count} unique dicts)"
+                                        )
+                                    } else {
+                                        format!("Already imported ({already_count})")
+                                    };
+                                    view! {
                                     <details class="dict-sources-section">
                                         <summary>
-                                            <strong>{format!(
-                                                "Already imported ({already_count})"
-                                            )}</strong>
+                                            <strong>{label}</strong>
                                         </summary>
                                         {render_preview_table(
                                             already_rows,
@@ -928,6 +954,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                             set_selected,
                                         )}
                                     </details>
+                                    }
                                 })}
                             </div>
                         </div>
@@ -1501,6 +1528,7 @@ fn render_preview_table(
                         "ready" => "Ready",
                         "already-imported" => "Already imported",
                         "unsupported-format" => "Unsupported format",
+                        "empty" => "Empty — no entries",
                         "broken" => "Broken",
                         other => other,
                     }.to_string();

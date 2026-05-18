@@ -68,6 +68,10 @@ pub enum DictPreviewStatus {
     AlreadyImported,
     /// index.json reports format != 3.
     UnsupportedFormat,
+    /// Valid index.json but the zip contains no term / kanji /
+    /// meta / tag bank files — nothing to import. Surfaced so the
+    /// user can move it aside via "Move problematic".
+    Empty,
     /// Couldn't open the zip, missing index.json, or invalid JSON.
     Broken,
 }
@@ -131,10 +135,16 @@ fn preview_zip(zip_path: &Path, existing: &HashSet<String>) -> DictPreview {
     match peek_index(zip_path) {
         Ok(idx) => {
             let already = existing.contains(&idx.title);
+            // Status precedence:
+            //   already-imported > unsupported-format > empty > ready
+            // "empty" gets surfaced even if the format is v3 so the
+            // user can spot useless zips and move them aside.
             let status = if already {
                 DictPreviewStatus::AlreadyImported
             } else if idx.format != 3 {
                 DictPreviewStatus::UnsupportedFormat
+            } else if idx.bank_file_count == 0 {
+                DictPreviewStatus::Empty
             } else {
                 DictPreviewStatus::Ready
             };

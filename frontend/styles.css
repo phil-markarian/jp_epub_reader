@@ -428,6 +428,7 @@ details[open] > summary::before { transform: rotate(90deg); }
 .dict-status-already-imported { color: #555; opacity: 0.85; }
 .dict-status-unsupported-format { color: #b85c00; }
 .dict-status-broken { color: #b00020; }
+.dict-status-empty { color: #b85c00; font-style: italic; }
 
 /* Folder-path readout next to the "Choose folder…" button. Long
  * paths ellipsize on the right rather than wrapping onto a new

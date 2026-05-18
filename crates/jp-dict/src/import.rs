@@ -83,15 +83,38 @@ pub fn peek_index(zip_path: &Path) -> Result<IndexPeek> {
         .map_err(|e| Error::Other(format!("open zip {zip_path:?}: {e}")))?;
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|e| Error::Other(format!("read zip {zip_path:?}: {e}")))?;
-    let mut entry = archive
-        .by_name("index.json")
-        .map_err(|e| Error::Other(format!("zip missing index.json: {e}")))?;
     let mut buf = String::new();
-    entry
-        .read_to_string(&mut buf)
-        .map_err(|e| Error::Other(format!("read index.json: {e}")))?;
+    {
+        let mut entry = archive
+            .by_name("index.json")
+            .map_err(|e| Error::Other(format!("zip missing index.json: {e}")))?;
+        entry
+            .read_to_string(&mut buf)
+            .map_err(|e| Error::Other(format!("read index.json: {e}")))?;
+    }
     let parsed: IndexJson = serde_json::from_str(&buf)
         .map_err(|e| Error::Other(format!("parse index.json: {e}")))?;
+    // Count term / kanji / meta / tag bank files without reading
+    // their contents. A zip with 0 banks of any kind has only
+    // metadata and can't contribute to lookups — the scanner uses
+    // this to flag "empty" zips.
+    let mut bank_file_count: u32 = 0;
+    for i in 0..archive.len() {
+        let name = archive
+            .by_index(i)
+            .map_err(|e| Error::Other(e.to_string()))?
+            .name()
+            .to_owned();
+        let bank = (name.starts_with("term_bank_")
+            || name.starts_with("term_meta_bank_")
+            || name.starts_with("kanji_bank_")
+            || name.starts_with("kanji_meta_bank_")
+            || name.starts_with("tag_bank_"))
+            && name.ends_with(".json");
+        if bank {
+            bank_file_count += 1;
+        }
+    }
     Ok(IndexPeek {
         title: parsed.title,
         format: parsed.format,
@@ -99,6 +122,7 @@ pub fn peek_index(zip_path: &Path) -> Result<IndexPeek> {
         description: parsed.description,
         attribution: parsed.attribution,
         url: parsed.url,
+        bank_file_count,
     })
 }
 
