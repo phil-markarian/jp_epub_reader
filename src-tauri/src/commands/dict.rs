@@ -351,16 +351,27 @@ pub fn list_dictionaries(
 }
 
 #[tauri::command]
-pub fn delete_dictionary(
+pub async fn delete_dictionary(
     id: i64,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state.dict_db.delete_dictionary(id).map_err(|e| e.to_string())
+    let db = state.dict_db.clone();
+    // CASCADE drops potentially hundreds of thousands of term rows;
+    // run off the runtime thread so the IPC channel stays open and
+    // the frontend can show per-row progress without the beachball.
+    tokio::task::spawn_blocking(move || db.delete_dictionary(id))
+        .await
+        .map_err(|e| format!("delete task failed: {e}"))?
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn delete_all_dictionaries(state: State<'_, AppState>) -> Result<usize, String> {
-    state.dict_db.delete_all_dictionaries().map_err(|e| e.to_string())
+pub async fn delete_all_dictionaries(state: State<'_, AppState>) -> Result<usize, String> {
+    let db = state.dict_db.clone();
+    tokio::task::spawn_blocking(move || db.delete_all_dictionaries())
+        .await
+        .map_err(|e| format!("delete-all task failed: {e}"))?
+        .map_err(|e| e.to_string())
 }
 
 /// Re-run the import for an existing dictionary. We delete the

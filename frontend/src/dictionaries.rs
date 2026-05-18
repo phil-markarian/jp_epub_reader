@@ -173,6 +173,16 @@ pub fn DictionariesPanel() -> impl IntoView {
         std::collections::HashSet::new(),
     );
     let (queue_rows, set_queue_rows) = signal::<Vec<QueueRow>>(Vec::new());
+    // Per-row in-flight tracker for single delete / reimport so the
+    // button can disable itself + render a spinning indicator while
+    // the IPC roundtrip is in flight. Bulk operations use the modal
+    // queue (queue_rows above), not this set.
+    let (pending_actions, set_pending_actions) =
+        signal::<std::collections::HashSet<i64>>(std::collections::HashSet::new());
+    // Heading shown on the bulk-operation modal. Set by whichever
+    // path seeded queue_rows: import / reimport-all / delete-all.
+    let (queue_heading, set_queue_heading) =
+        signal::<&'static str>("Importing dictionaries");
     let (counts, set_counts) = signal::<(usize, usize, usize, usize, usize)>((0, 0, 0, 0, 0));
     // (imported, skipped, failed, cancelled, done) — derived from
     // row signal updates inside the import loop.
@@ -340,6 +350,7 @@ pub fn DictionariesPanel() -> impl IntoView {
             })
             .collect();
         let total = rows.len();
+        set_queue_heading.set("Importing dictionaries");
         set_queue_rows.set(rows.clone());
         set_counts.set((0, 0, 0, 0, 0));
         set_busy.set(true);
@@ -647,7 +658,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                         <div class="dict-modal-backdrop" role="dialog" aria-modal="true">
                             <div class="dict-modal">
                                 <header class="dict-modal-header">
-                                    <h3>"Importing dictionaries"</h3>
+                                    <h3>{move || queue_heading.get()}</h3>
                                     <span class="muted">
                                         {format!("{real_done} / {total}")}
                                     </span>
@@ -972,66 +983,153 @@ pub fn DictionariesPanel() -> impl IntoView {
                         let count = rows.len();
                         let last_idx = count.saturating_sub(1);
                         let ordered_ids: Vec<i64> = rows.iter().map(|d| d.id).collect();
+                        let snapshot_for_delete = rows.iter().cloned().collect::<Vec<_>>();
                         let on_delete_all = move |_| {
-                            // Two-click confirm pattern: first click
-                            // arms (banner asks for confirmation),
-                            // second click within 5s wipes.
+                            // Two-click confirm: first click arms,
+                            // second click within 5s starts the wipe
+                            // (which goes through the modal queue
+                            // for progress).
                             let armed_at = window_now_ms();
                             let prev = window_get_number("__JP_DICT_DELETE_ALL_AT")
                                 .unwrap_or(0.0);
-                            if armed_at - prev < 5000.0 && prev != 0.0 {
-                                window_set_number("__JP_DICT_DELETE_ALL_AT", 0.0);
-                                spawn_local(async move {
-                                    if let Err(e) =
-                                        invoke("delete_all_dictionaries", JsValue::from_str("{}"))
-                                            .await
-                                    {
-                                        web_sys::console::warn_1(
-                                            &format!("delete all: {}", stringify_err(e)).into(),
-                                        );
-                                    }
-                                    refresh();
-                                });
-                            } else {
+                            if !(armed_at - prev < 5000.0 && prev != 0.0) {
                                 window_set_number("__JP_DICT_DELETE_ALL_AT", armed_at);
                                 set_banner.set(Some(
                                     "Click \"Delete all\" again within 5 seconds to wipe every imported dictionary."
                                         .into(),
                                 ));
+                                return;
                             }
-                        };
-                        let ids_for_reimport_all: Vec<i64> = ordered_ids.clone();
-                        let on_reimport_all = move |_| {
-                            let ids = ids_for_reimport_all.clone();
-                            let total = ids.len();
-                            if total == 0 { return; }
+                            window_set_number("__JP_DICT_DELETE_ALL_AT", 0.0);
+
+                            // Build modal queue from the snapshot so
+                            // progress shows one row at a time.
+                            let snap = snapshot_for_delete.clone();
+                            let qrows: Vec<QueueRow> = snap
+                                .iter()
+                                .enumerate()
+                                .map(|(i, d)| QueueRow {
+                                    index: i + 1,
+                                    path: format!("dict:{}", d.id),
+                                    name: d.name.clone(),
+                                    status: ArcRwSignal::new(QueueStatus::Queued),
+                                    error: ArcRwSignal::new(None),
+                                    progress: ArcRwSignal::new(None),
+                                })
+                                .collect();
+                            let total = qrows.len();
+                            set_queue_heading.set("Deleting dictionaries");
+                            set_queue_rows.set(qrows.clone());
+                            set_counts.set((0, 0, 0, 0, 0));
+                            set_busy.set(true);
+                            set_banner.set(None);
+
+                            let snap_ids: Vec<i64> = snap.iter().map(|d| d.id).collect();
                             spawn_local(async move {
-                                let mut done = 0usize;
+                                let mut imported = 0usize; // reused as "deleted" count
                                 let mut failed = 0usize;
-                                for id in ids {
-                                    set_banner.set(Some(format!(
-                                        "Reimporting {} / {total}…",
-                                        done + 1,
-                                    )));
+                                for (i, id) in snap_ids.iter().enumerate() {
+                                    if i >= qrows.len() { break; }
+                                    let row = &qrows[i];
+                                    row.status.set(QueueStatus::Running);
+                                    yield_to_browser().await;
                                     let args = js_sys::Object::new();
                                     let _ = js_sys::Reflect::set(
                                         &args,
                                         &JsValue::from_str("id"),
-                                        &JsValue::from_f64(id as f64),
+                                        &JsValue::from_f64(*id as f64),
                                     );
-                                    match invoke("reimport_dictionary", args.into()).await {
-                                        Ok(_) => done += 1,
+                                    match invoke("delete_dictionary", args.into()).await {
+                                        Ok(_) => {
+                                            imported += 1;
+                                            row.status.set(QueueStatus::Imported);
+                                        }
                                         Err(e) => {
                                             failed += 1;
-                                            web_sys::console::warn_1(
-                                                &format!("reimport {id}: {}", stringify_err(e))
-                                                    .into(),
-                                            );
+                                            let msg = stringify_err(e);
+                                            row.error.set(Some(msg));
+                                            row.status.set(QueueStatus::Failed);
                                         }
                                     }
+                                    set_counts.set((
+                                        imported,
+                                        0,
+                                        failed,
+                                        0,
+                                        imported + failed,
+                                    ));
                                 }
+                                set_busy.set(false);
                                 set_banner.set(Some(format!(
-                                    "Reimport done: {done} ok, {failed} failed."
+                                    "Deleted {imported} of {total}{}",
+                                    if failed > 0 { format!(" ({failed} failed)") } else { String::new() }
+                                )));
+                                refresh();
+                            });
+                        };
+
+                        let snapshot_for_reimport = rows.iter().cloned().collect::<Vec<_>>();
+                        let on_reimport_all = move |_| {
+                            let snap = snapshot_for_reimport.clone();
+                            if snap.is_empty() { return; }
+                            let qrows: Vec<QueueRow> = snap
+                                .iter()
+                                .enumerate()
+                                .map(|(i, d)| QueueRow {
+                                    index: i + 1,
+                                    path: format!("dict:{}", d.id),
+                                    name: d.name.clone(),
+                                    status: ArcRwSignal::new(QueueStatus::Queued),
+                                    error: ArcRwSignal::new(None),
+                                    progress: ArcRwSignal::new(None),
+                                })
+                                .collect();
+                            let total = qrows.len();
+                            set_queue_heading.set("Reimporting dictionaries");
+                            set_queue_rows.set(qrows.clone());
+                            set_counts.set((0, 0, 0, 0, 0));
+                            set_busy.set(true);
+                            set_banner.set(None);
+
+                            let snap_ids: Vec<i64> = snap.iter().map(|d| d.id).collect();
+                            spawn_local(async move {
+                                let mut imported = 0usize;
+                                let mut failed = 0usize;
+                                for (i, id) in snap_ids.iter().enumerate() {
+                                    if i >= qrows.len() { break; }
+                                    let row = &qrows[i];
+                                    row.status.set(QueueStatus::Running);
+                                    yield_to_browser().await;
+                                    let args = js_sys::Object::new();
+                                    let _ = js_sys::Reflect::set(
+                                        &args,
+                                        &JsValue::from_str("id"),
+                                        &JsValue::from_f64(*id as f64),
+                                    );
+                                    match invoke("reimport_dictionary", args.into()).await {
+                                        Ok(_) => {
+                                            imported += 1;
+                                            row.status.set(QueueStatus::Imported);
+                                        }
+                                        Err(e) => {
+                                            failed += 1;
+                                            let msg = stringify_err(e);
+                                            row.error.set(Some(msg));
+                                            row.status.set(QueueStatus::Failed);
+                                        }
+                                    }
+                                    set_counts.set((
+                                        imported,
+                                        0,
+                                        failed,
+                                        0,
+                                        imported + failed,
+                                    ));
+                                }
+                                set_busy.set(false);
+                                set_banner.set(Some(format!(
+                                    "Reimported {imported} of {total}{}",
+                                    if failed > 0 { format!(" ({failed} failed)") } else { String::new() }
                                 )));
                                 refresh();
                             });
@@ -1088,6 +1186,20 @@ pub fn DictionariesPanel() -> impl IntoView {
                                             let n = name.clone();
                                             move |_| {
                                                 let n = n.clone();
+                                                // Skip if this row
+                                                // already has another
+                                                // action in flight.
+                                                if pending_actions.get_untracked().contains(&id) {
+                                                    return;
+                                                }
+                                                set_pending_actions.update(|s| { s.insert(id); });
+                                                // Drop the row from
+                                                // the local list now
+                                                // so the UI feels
+                                                // instant; the actual
+                                                // DB delete catches
+                                                // up in the background.
+                                                set_dicts.update(|d| d.retain(|x| x.id != id));
                                                 spawn_local(async move {
                                                     let args = js_sys::Object::new();
                                                     let _ = js_sys::Reflect::set(
@@ -1095,12 +1207,16 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                         &JsValue::from_str("id"),
                                                         &JsValue::from_f64(id as f64),
                                                     );
-                                                    match invoke("delete_dictionary", args.into()).await {
-                                                        Ok(_) => refresh(),
-                                                        Err(e) => web_sys::console::warn_1(
+                                                    if let Err(e) =
+                                                        invoke("delete_dictionary", args.into()).await
+                                                    {
+                                                        web_sys::console::warn_1(
                                                             &format!("delete {n}: {}", stringify_err(e)).into(),
-                                                        ),
+                                                        );
+                                                        // Roll back the optimistic remove.
+                                                        refresh();
                                                     }
+                                                    set_pending_actions.update(|s| { s.remove(&id); });
                                                 });
                                             }
                                         };
@@ -1108,6 +1224,10 @@ pub fn DictionariesPanel() -> impl IntoView {
                                             let n = name.clone();
                                             move |_| {
                                                 let n = n.clone();
+                                                if pending_actions.get_untracked().contains(&id) {
+                                                    return;
+                                                }
+                                                set_pending_actions.update(|s| { s.insert(id); });
                                                 spawn_local(async move {
                                                     let args = js_sys::Object::new();
                                                     let _ = js_sys::Reflect::set(
@@ -1121,6 +1241,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                             &format!("reimport {n}: {}", stringify_err(e)).into(),
                                                         ),
                                                     }
+                                                    set_pending_actions.update(|s| { s.remove(&id); });
                                                 });
                                             }
                                         };
@@ -1304,7 +1425,15 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                     <div class="dict-row-actions">
                                                         <button
                                                             type="button"
-                                                            class="dict-icon-btn"
+                                                            class=move || {
+                                                                let busy = pending_actions.get().contains(&id);
+                                                                if busy {
+                                                                    "dict-icon-btn dict-icon-busy"
+                                                                } else {
+                                                                    "dict-icon-btn"
+                                                                }
+                                                            }
+                                                            prop:disabled=move || pending_actions.get().contains(&id)
                                                             on:click=on_reimport
                                                             title="Reimport from source zip"
                                                             aria-label="Reimport dictionary"
@@ -1313,7 +1442,15 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                         </button>
                                                         <button
                                                             type="button"
-                                                            class="dict-icon-btn dict-icon-danger"
+                                                            class=move || {
+                                                                let busy = pending_actions.get().contains(&id);
+                                                                if busy {
+                                                                    "dict-icon-btn dict-icon-danger dict-icon-busy"
+                                                                } else {
+                                                                    "dict-icon-btn dict-icon-danger"
+                                                                }
+                                                            }
+                                                            prop:disabled=move || pending_actions.get().contains(&id)
                                                             on:click=on_delete
                                                             title="Delete dictionary"
                                                             aria-label="Delete dictionary"

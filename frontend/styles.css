@@ -297,6 +297,14 @@ details[open] > summary::before { transform: rotate(90deg); }
   border-color: rgba(176, 0, 32, 0.5);
 }
 .dict-icon-danger:hover .dict-svg-icon { color: #b00020; }
+/* Pulse while a single-row delete/reimport is in flight so the
+ * user can see the action is being processed even though we
+ * already optimistically removed/updated the row locally. */
+.dict-icon-busy {
+  opacity: 0.45;
+  cursor: progress !important;
+  animation: queue-pulse 1.2s ease-in-out infinite;
+}
 
 /* Reused SVG icon: takes its color from `currentColor` and sizes
  * from the parent button's font-size, so a single `font-size`
