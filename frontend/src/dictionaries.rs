@@ -724,13 +724,22 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                                             short
                                                                         })
                                                                     } else { None };
-                                                                    let bar = if st == QueueStatus::Running {
-                                                                        let (cur, tot) = prog.get().unwrap_or((0, 0));
-                                                                        let pct = if tot > 0 {
-                                                                            (cur as f64 / tot as f64 * 100.0).clamp(0.0, 100.0)
-                                                                        } else { 0.0 };
-                                                                        Some((pct, cur, tot))
-                                                                    } else { None };
+                                                                    // Only render the per-row fill
+                                                                    // bar when we actually have
+                                                                    // byte-progress signals coming
+                                                                    // in (i.e. real imports). Delete
+                                                                    // / reimport / single-shot ops
+                                                                    // never emit progress, so for
+                                                                    // those we fall through to the
+                                                                    // text badge ("Working…") and
+                                                                    // skip the 0% / 0 B placeholder.
+                                                                    let bar = match (st, prog.get()) {
+                                                                        (QueueStatus::Running, Some((cur, tot))) if tot > 0 => {
+                                                                            let pct = (cur as f64 / tot as f64 * 100.0).clamp(0.0, 100.0);
+                                                                            Some((pct, cur, tot))
+                                                                        }
+                                                                        _ => None,
+                                                                    };
                                                                     // While running, replace the
                                                                     // "Importing…" pulse with just
                                                                     // the progress bar + numeric
