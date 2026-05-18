@@ -387,6 +387,7 @@ pub async fn delete_all_dictionaries(state: State<'_, AppState>) -> Result<usize
 #[tauri::command]
 pub async fn reimport_dictionary(
     id: i64,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ImportOutcome, String> {
     let db = state.dict_db.clone();
@@ -443,26 +444,54 @@ pub async fn reimport_dictionary(
         }
     };
 
+    // Progress emit — same shape + throttle as import_single_dictionary
+    // so the frontend can match dict-row-progress events to the
+    // queue row via the path string. For reimport we key on the
+    // dict id (`dict:N`) rather than the on-disk path, since the
+    // frontend's QueueRow uses that ID-prefixed string when it
+    // seeds the queue for bulk reimport.
+    let row_key = format!("dict:{id}");
+    let last_emit = std::sync::Arc::new(AtomicU64::new(0));
+    let app_for_progress = app.clone();
+    let key_for_progress = row_key.clone();
+    let last_emit_for_progress = last_emit.clone();
+    let on_progress = move |current: u64, total: u64| {
+        let prev = last_emit_for_progress.load(Ordering::Relaxed);
+        let threshold = (total / 200).max(64 * 1024);
+        if current.saturating_sub(prev) < threshold && current != total && current != 0 {
+            return;
+        }
+        last_emit_for_progress.store(current, Ordering::Relaxed);
+        let _ = app_for_progress.emit(
+            "dict-row-progress",
+            ImportProgressPayload {
+                path: &key_for_progress,
+                current,
+                total,
+            },
+        );
+    };
+
     tokio::task::spawn_blocking(move || -> ImportOutcome {
         // Delete first so the existing-name skip doesn't fire.
         if let Err(e) = db.delete_dictionary(id) {
             return ImportOutcome::Failed {
-                path: source_path,
+                path: row_key,
                 error: format!("delete existing: {e}"),
             };
         }
         let zip_path = PathBuf::from(&source_path);
-        match db.import_zip_with_cancel(&zip_path, &cancel) {
+        match db.import_zip_full(&zip_path, &cancel, &on_progress) {
             Ok(Some(summary)) => ImportOutcome::Imported {
-                path: source_path,
+                path: row_key,
                 summary,
             },
             Ok(None) => ImportOutcome::Skipped {
-                path: source_path,
+                path: row_key,
                 reason: "already imported after delete (race?)".into(),
             },
             Err(e) => ImportOutcome::Failed {
-                path: source_path,
+                path: row_key,
                 error: e.to_string(),
             },
         }

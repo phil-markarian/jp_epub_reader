@@ -819,14 +819,18 @@ pub fn DictionariesPanel() -> impl IntoView {
                                         }.into_any()
                                     } else {
                                         // Gather any rows whose final
-                                        // status is Failed so the user
-                                        // can move them aside in one
-                                        // click.
+                                        // status is Failed AND whose
+                                        // `path` is a real on-disk
+                                        // file (not the synthetic
+                                        // "dict:N" id used by bulk
+                                        // delete / reimport). Only
+                                        // real paths can be moved.
                                         let failed_paths: Vec<String> = queue_rows
                                             .get()
                                             .iter()
                                             .filter(|r| r.status.get_untracked() == QueueStatus::Failed)
                                             .map(|r| r.path.clone())
+                                            .filter(|p| !p.starts_with("dict:"))
                                             .collect();
                                         let failed_count = failed_paths.len();
                                         view! {
