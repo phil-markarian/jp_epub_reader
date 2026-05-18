@@ -107,6 +107,22 @@ impl Db {
         })
     }
 
+    /// Look up just the dictionary's display name. Used by the
+    /// reimport fallback to match a NULL-source-path dict against
+    /// scanned zips by title.
+    pub fn dictionary_name(&self, id: i64) -> Result<Option<String>> {
+        self.with_conn(|c| {
+            let name: Option<String> = c
+                .query_row(
+                    "SELECT name FROM dictionary WHERE id = ?",
+                    rusqlite::params![id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| Error::Other(format!("dict name: {e}")))?;
+            Ok(name)
+        })
+    }
+
     pub fn set_dictionary_notes(&self, id: i64, notes: Option<&str>) -> Result<()> {
         self.with_conn(|c| {
             c.execute(

@@ -393,14 +393,55 @@ pub async fn reimport_dictionary(
     let cancel = state.dict_import_cancel.clone();
     cancel.store(false, Ordering::Release);
 
-    let source_path = db
+    // Prefer the recorded source_path. If the dict was imported
+    // before migration v3 (source_path is NULL), fall back to
+    // scanning the saved dict folder for a zip whose index.json
+    // title matches this dict's name.
+    let source_path: String = match db
         .dictionary_source_path(id)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| {
-            "no source path recorded for this dictionary; \
-             delete and re-import from the folder instead"
-                .to_string()
-        })?;
+    {
+        Some(p) => p,
+        None => {
+            let dict_name = db
+                .dictionary_name(id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("dictionary {id} not found"))?;
+            let folder = state.settings.get_string(SETTING_DICT_LAST_FOLDER).ok_or_else(|| {
+                format!(
+                    "no source path recorded for {dict_name} and no scan folder saved; \
+                     run a folder scan first or delete and re-import"
+                )
+            })?;
+            let folder = folder.clone();
+            let dict_name_for_scan = dict_name.clone();
+            // Run the title-match scan off-thread; collect_zips +
+            // peek_index do real disk I/O.
+            let resolved = tokio::task::spawn_blocking(move || -> Option<String> {
+                let zips = collect_zips(&PathBuf::from(&folder));
+                for z in &zips {
+                    if let Ok(peek) = peek_index(z) {
+                        if peek.title == dict_name_for_scan {
+                            return Some(z.to_string_lossy().to_string());
+                        }
+                    }
+                }
+                None
+            })
+            .await
+            .map_err(|e| format!("source-scan task failed: {e}"))?;
+            resolved.ok_or_else(|| {
+                format!(
+                    "couldn't find a zip titled \"{dict_name}\" in {}; \
+                     re-scan a folder that contains it",
+                    state
+                        .settings
+                        .get_string(SETTING_DICT_LAST_FOLDER)
+                        .unwrap_or_default()
+                )
+            })?
+        }
+    };
 
     tokio::task::spawn_blocking(move || -> ImportOutcome {
         // Delete first so the existing-name skip doesn't fire.
