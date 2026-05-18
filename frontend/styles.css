@@ -319,6 +319,12 @@ details[open] > summary::before { transform: rotate(90deg); }
 
 /* Header actions next to "Installed (N)": Reimport all + Delete all. */
 .dict-installed-header { align-items: center; margin-top: 12px; gap: 6px; }
+.dict-installed-banner {
+  /* Sits between the Sources scroll and the Installed header so
+   * the confirm prompt / bulk-op summary lands where the user
+   * just clicked, not at the top of the panel. */
+  margin: 12px 0 4px 0;
+}
 .dict-header-action {
   background: transparent;
   border: 1px solid rgba(127, 127, 127, 0.35);

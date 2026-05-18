@@ -194,6 +194,11 @@ pub fn DictionariesPanel() -> impl IntoView {
     let (busy, set_busy) = signal::<bool>(false);
     let (scanning, set_scanning) = signal::<bool>(false);
     let (banner, set_banner) = signal::<Option<String>>(None);
+    // Banner specifically for the Installed section's actions
+    // (Delete all confirm prompt, bulk reimport summaries, etc.).
+    // Lives next to those actions so the user sees feedback where
+    // they triggered it rather than at the top of the panel.
+    let (installed_banner, set_installed_banner) = signal::<Option<String>>(None);
     // Folder currently being scanned / last imported from. Surfaced
     // next to the "Choose folder…" button so the user can tell
     // which directory the checklist below corresponds to.
@@ -999,7 +1004,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                 .unwrap_or(0.0);
                             if !(armed_at - prev < 5000.0 && prev != 0.0) {
                                 window_set_number("__JP_DICT_DELETE_ALL_AT", armed_at);
-                                set_banner.set(Some(
+                                set_installed_banner.set(Some(
                                     "Click \"Delete all\" again within 5 seconds to wipe every imported dictionary."
                                         .into(),
                                 ));
@@ -1027,7 +1032,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                             set_queue_rows.set(qrows.clone());
                             set_counts.set((0, 0, 0, 0, 0));
                             set_busy.set(true);
-                            set_banner.set(None);
+                            set_installed_banner.set(None);
 
                             let snap_ids: Vec<i64> = snap.iter().map(|d| d.id).collect();
                             cancel_write.set(false);
@@ -1090,7 +1095,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                         if failed > 0 { format!(" ({failed} failed)") } else { String::new() }
                                     )
                                 };
-                                set_banner.set(Some(summary));
+                                set_installed_banner.set(Some(summary));
                                 refresh();
                             });
                         };
@@ -1116,7 +1121,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                             set_queue_rows.set(qrows.clone());
                             set_counts.set((0, 0, 0, 0, 0));
                             set_busy.set(true);
-                            set_banner.set(None);
+                            set_installed_banner.set(None);
 
                             let snap_ids: Vec<i64> = snap.iter().map(|d| d.id).collect();
                             cancel_write.set(false);
@@ -1179,11 +1184,14 @@ pub fn DictionariesPanel() -> impl IntoView {
                                         if failed > 0 { format!(" ({failed} failed)") } else { String::new() }
                                     )
                                 };
-                                set_banner.set(Some(summary));
+                                set_installed_banner.set(Some(summary));
                                 refresh();
                             });
                         };
                         view! {
+                            {move || installed_banner.get().map(|b| view! {
+                                <div class="banner dict-installed-banner">{b}</div>
+                            })}
                             <div class="row dict-installed-header">
                                 <h3 style="margin: 0; flex: 1 1 auto;">{format!("Installed ({count})")}</h3>
                                 <button
