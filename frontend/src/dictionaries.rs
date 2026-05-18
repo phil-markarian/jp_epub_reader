@@ -81,6 +81,9 @@ enum QueueStatus {
     Queued,
     Running,
     Imported,
+    /// Same shape as Imported but labelled "Deleted" — used when a
+    /// bulk delete-all run completes a row.
+    Deleted,
     Skipped,
     Failed,
     Cancelled,
@@ -92,6 +95,7 @@ impl QueueStatus {
             Self::Queued => "queue-queued",
             Self::Running => "queue-running",
             Self::Imported => "queue-imported",
+            Self::Deleted => "queue-deleted",
             Self::Skipped => "queue-skipped",
             Self::Failed => "queue-failed",
             Self::Cancelled => "queue-cancelled",
@@ -100,8 +104,9 @@ impl QueueStatus {
     fn label(&self) -> &'static str {
         match self {
             Self::Queued => "Queued",
-            Self::Running => "Importing…",
+            Self::Running => "Working…",
             Self::Imported => "Imported",
+            Self::Deleted => "Deleted",
             Self::Skipped => "Skipped",
             Self::Failed => "Failed",
             Self::Cancelled => "Cancelled",
@@ -1025,12 +1030,26 @@ pub fn DictionariesPanel() -> impl IntoView {
                             set_banner.set(None);
 
                             let snap_ids: Vec<i64> = snap.iter().map(|d| d.id).collect();
+                            cancel_write.set(false);
                             spawn_local(async move {
-                                let mut imported = 0usize; // reused as "deleted" count
+                                let mut deleted = 0usize;
                                 let mut failed = 0usize;
+                                let mut cancelled = 0usize;
                                 for (i, id) in snap_ids.iter().enumerate() {
                                     if i >= qrows.len() { break; }
                                     let row = &qrows[i];
+                                    if cancel_read.get_untracked() {
+                                        row.status.set(QueueStatus::Cancelled);
+                                        cancelled += 1;
+                                        set_counts.set((
+                                            deleted,
+                                            0,
+                                            failed,
+                                            cancelled,
+                                            deleted + failed + cancelled,
+                                        ));
+                                        continue;
+                                    }
                                     row.status.set(QueueStatus::Running);
                                     yield_to_browser().await;
                                     let args = js_sys::Object::new();
@@ -1041,8 +1060,8 @@ pub fn DictionariesPanel() -> impl IntoView {
                                     );
                                     match invoke("delete_dictionary", args.into()).await {
                                         Ok(_) => {
-                                            imported += 1;
-                                            row.status.set(QueueStatus::Imported);
+                                            deleted += 1;
+                                            row.status.set(QueueStatus::Deleted);
                                         }
                                         Err(e) => {
                                             failed += 1;
@@ -1052,18 +1071,26 @@ pub fn DictionariesPanel() -> impl IntoView {
                                         }
                                     }
                                     set_counts.set((
-                                        imported,
+                                        deleted,
                                         0,
                                         failed,
-                                        0,
-                                        imported + failed,
+                                        cancelled,
+                                        deleted + failed + cancelled,
                                     ));
                                 }
                                 set_busy.set(false);
-                                set_banner.set(Some(format!(
-                                    "Deleted {imported} of {total}{}",
-                                    if failed > 0 { format!(" ({failed} failed)") } else { String::new() }
-                                )));
+                                let summary = if cancelled > 0 {
+                                    format!(
+                                        "Deleted {deleted} of {total}; {cancelled} cancelled{}",
+                                        if failed > 0 { format!(", {failed} failed") } else { String::new() }
+                                    )
+                                } else {
+                                    format!(
+                                        "Deleted {deleted} of {total}{}",
+                                        if failed > 0 { format!(" ({failed} failed)") } else { String::new() }
+                                    )
+                                };
+                                set_banner.set(Some(summary));
                                 refresh();
                             });
                         };
@@ -1092,12 +1119,26 @@ pub fn DictionariesPanel() -> impl IntoView {
                             set_banner.set(None);
 
                             let snap_ids: Vec<i64> = snap.iter().map(|d| d.id).collect();
+                            cancel_write.set(false);
                             spawn_local(async move {
                                 let mut imported = 0usize;
                                 let mut failed = 0usize;
+                                let mut cancelled = 0usize;
                                 for (i, id) in snap_ids.iter().enumerate() {
                                     if i >= qrows.len() { break; }
                                     let row = &qrows[i];
+                                    if cancel_read.get_untracked() {
+                                        row.status.set(QueueStatus::Cancelled);
+                                        cancelled += 1;
+                                        set_counts.set((
+                                            imported,
+                                            0,
+                                            failed,
+                                            cancelled,
+                                            imported + failed + cancelled,
+                                        ));
+                                        continue;
+                                    }
                                     row.status.set(QueueStatus::Running);
                                     yield_to_browser().await;
                                     let args = js_sys::Object::new();
@@ -1122,15 +1163,23 @@ pub fn DictionariesPanel() -> impl IntoView {
                                         imported,
                                         0,
                                         failed,
-                                        0,
-                                        imported + failed,
+                                        cancelled,
+                                        imported + failed + cancelled,
                                     ));
                                 }
                                 set_busy.set(false);
-                                set_banner.set(Some(format!(
-                                    "Reimported {imported} of {total}{}",
-                                    if failed > 0 { format!(" ({failed} failed)") } else { String::new() }
-                                )));
+                                let summary = if cancelled > 0 {
+                                    format!(
+                                        "Reimported {imported} of {total}; {cancelled} cancelled{}",
+                                        if failed > 0 { format!(", {failed} failed") } else { String::new() }
+                                    )
+                                } else {
+                                    format!(
+                                        "Reimported {imported} of {total}{}",
+                                        if failed > 0 { format!(" ({failed} failed)") } else { String::new() }
+                                    )
+                                };
+                                set_banner.set(Some(summary));
                                 refresh();
                             });
                         };
@@ -1152,7 +1201,8 @@ pub fn DictionariesPanel() -> impl IntoView {
                                     on:click=on_delete_all
                                     title="Delete every imported dictionary (two-click confirm)"
                                 >
-                                    "Delete all"
+                                    <TrashIcon />
+                                    " Delete all"
                                 </button>
                             </div>
                             <p class="muted dict-priority-hint">

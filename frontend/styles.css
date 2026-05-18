@@ -559,6 +559,7 @@ details[open] > summary::before { transform: rotate(90deg); }
   animation: queue-pulse 1.2s ease-in-out infinite;
 }
 .queue-status.queue-imported { color: #2a7a36; }
+.queue-status.queue-deleted { color: #6b3d00; }
 .queue-status.queue-skipped { color: #888; font-weight: 400; }
 .queue-status.queue-failed { color: #b00020; }
 .queue-status.queue-cancelled { color: #b85c00; font-weight: 400; }
