@@ -1273,25 +1273,27 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                     {d.name.clone()}
                                                 </td>
                                                 <td>{tc}</td>
-                                                <td class="ignore-row-click dict-row-actions">
-                                                    <button
-                                                        type="button"
-                                                        class="dict-icon-btn"
-                                                        on:click=on_reimport
-                                                        title="Reimport from source zip"
-                                                        aria-label="Reimport dictionary"
-                                                    >
-                                                        <RotateRightIcon />
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        class="dict-icon-btn dict-icon-danger"
-                                                        on:click=on_delete
-                                                        title="Delete dictionary"
-                                                        aria-label="Delete dictionary"
-                                                    >
-                                                        <TrashIcon />
-                                                    </button>
+                                                <td class="ignore-row-click dict-row-actions-cell">
+                                                    <div class="dict-row-actions">
+                                                        <button
+                                                            type="button"
+                                                            class="dict-icon-btn"
+                                                            on:click=on_reimport
+                                                            title="Reimport from source zip"
+                                                            aria-label="Reimport dictionary"
+                                                        >
+                                                            <RotateRightIcon />
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            class="dict-icon-btn dict-icon-danger"
+                                                            on:click=on_delete
+                                                            title="Delete dictionary"
+                                                            aria-label="Delete dictionary"
+                                                        >
+                                                            <TrashIcon />
+                                                        </button>
+                                                    </div>
                                                 </td>
                                             </tr>
                                             {move || details_open.get().contains(&id).then(|| {

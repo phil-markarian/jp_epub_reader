@@ -263,7 +263,17 @@ details[open] > summary::before { transform: rotate(90deg); }
 }
 .dict-arrow:disabled { opacity: 0.25; cursor: default; }
 
-/* Installed-list row action column: reimport ⟳ + delete 🗑 */
+/* Installed-list row action column: reimport ⟳ + delete 🗑.
+ * The <td> keeps its default table-cell display (vertical-align
+ * middle, no width override); the inner .dict-row-actions div
+ * lays the two icon buttons out as inline-flex so they sit on
+ * the row baseline inside the cell, not outside it. */
+.dict-row-actions-cell {
+  vertical-align: middle;
+  white-space: nowrap;
+  padding: 4px 8px;
+  width: 1%; /* hugs content so the row's free space goes to Name */
+}
 .dict-row-actions {
   display: inline-flex;
   gap: 4px;
