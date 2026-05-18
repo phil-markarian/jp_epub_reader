@@ -17,6 +17,12 @@ pub struct Dictionary {
     /// Number of `term` rows that belong to this dictionary. Filled in
     /// by `list_dictionaries`; do not assume it's free to recompute.
     pub term_count: i64,
+    /// Auto-populated from index.json during import.
+    pub description: Option<String>,
+    pub attribution: Option<String>,
+    pub url: Option<String>,
+    /// Free-form notes the user types in the details panel.
+    pub user_notes: Option<String>,
 }
 
 impl Db {
@@ -26,7 +32,8 @@ impl Db {
                 .prepare(
                     "SELECT d.id, d.name, d.revision, d.format_version,
                             d.priority, d.enabled, d.imported_at,
-                            (SELECT COUNT(*) FROM term WHERE dict_id = d.id)
+                            (SELECT COUNT(*) FROM term WHERE dict_id = d.id),
+                            d.description, d.attribution, d.url, d.user_notes
                      FROM dictionary d
                      ORDER BY d.priority DESC, d.imported_at ASC",
                 )
@@ -42,6 +49,10 @@ impl Db {
                         enabled: r.get::<_, i64>(5)? != 0,
                         imported_at: r.get(6)?,
                         term_count: r.get(7)?,
+                        description: r.get(8)?,
+                        attribution: r.get(9)?,
+                        url: r.get(10)?,
+                        user_notes: r.get(11)?,
                     })
                 })
                 .map_err(|e| Error::Other(e.to_string()))?;
@@ -57,6 +68,17 @@ impl Db {
         self.with_conn(|c| {
             c.execute("DELETE FROM dictionary WHERE id = ?", rusqlite::params![id])
                 .map_err(|e| Error::Other(format!("delete dictionary: {e}")))?;
+            Ok(())
+        })
+    }
+
+    pub fn set_dictionary_notes(&self, id: i64, notes: Option<&str>) -> Result<()> {
+        self.with_conn(|c| {
+            c.execute(
+                "UPDATE dictionary SET user_notes = ? WHERE id = ?",
+                rusqlite::params![notes, id],
+            )
+            .map_err(|e| Error::Other(format!("set notes: {e}")))?;
             Ok(())
         })
     }

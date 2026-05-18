@@ -55,6 +55,7 @@ pub fn run() {
             commands::dict::list_dictionaries,
             commands::dict::delete_dictionary,
             commands::dict::set_dictionary_enabled,
+            commands::dict::set_dictionary_notes,
             commands::dict::reorder_dictionaries,
             commands::dict::get_dict_last_folder,
             commands::dict::clear_dict_last_folder,

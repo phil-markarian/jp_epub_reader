@@ -62,6 +62,12 @@ pub struct IndexPeek {
     pub title: String,
     pub format: i32,
     pub revision: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub attribution: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 pub fn peek_index(zip_path: &Path) -> Result<IndexPeek> {
@@ -82,6 +88,9 @@ pub fn peek_index(zip_path: &Path) -> Result<IndexPeek> {
         title: parsed.title,
         format: parsed.format,
         revision: parsed.revision,
+        description: parsed.description,
+        attribution: parsed.attribution,
+        url: parsed.url,
     })
 }
 
@@ -93,8 +102,14 @@ struct IndexJson {
     format: i32,
     #[serde(default)]
     revision: Option<String>,
-    // tolerated-but-ignored: description, attribution, url,
-    // sequenced, frequencyMode, isUpdatable, indexUrl, downloadUrl
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    attribution: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    // tolerated-but-ignored: sequenced, frequencyMode, isUpdatable,
+    // indexUrl, downloadUrl
 }
 
 impl Db {
@@ -220,13 +235,17 @@ impl Db {
 
             tx.execute(
                 "INSERT INTO dictionary
-                    (name, revision, format_version, priority, enabled, imported_at)
-                 VALUES (?, ?, ?, 0, 1, ?)",
+                    (name, revision, format_version, priority, enabled, imported_at,
+                     description, attribution, url)
+                 VALUES (?, ?, ?, 0, 1, ?, ?, ?, ?)",
                 rusqlite::params![
                     index.title,
                     index.revision,
                     index.format,
                     now,
+                    index.description,
+                    index.attribution,
+                    index.url,
                 ],
             )
             .map_err(|e| Error::Other(format!("insert dictionary: {e}")))?;

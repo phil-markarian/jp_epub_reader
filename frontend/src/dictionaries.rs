@@ -51,6 +51,14 @@ struct Dictionary {
     enabled: bool,
     imported_at: i64,
     term_count: i64,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    attribution: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    user_notes: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -154,6 +162,12 @@ fn format_bytes(n: u64) -> String {
 #[component]
 pub fn DictionariesPanel() -> impl IntoView {
     let (dicts, set_dicts) = signal::<Vec<Dictionary>>(Vec::new());
+    // Which installed-dict rows have their Details panel expanded.
+    // Keyed by dictionary id so the open state survives a refresh()
+    // (since the same ids come back; only term_count etc. may
+    // change).
+    let (details_open, set_details_open) =
+        signal::<std::collections::HashSet<i64>>(std::collections::HashSet::new());
     let (preview, set_preview) = signal::<Vec<DictPreview>>(Vec::new());
     let (selected, set_selected) = signal::<std::collections::HashSet<String>>(
         std::collections::HashSet::new(),
@@ -1164,10 +1178,41 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                         on:change=on_toggle
                                                     />
                                                 </td>
-                                                <td class="dict-name-cell">{d.name.clone()}</td>
+                                                <td class="dict-name-cell">
+                                                    {d.name.clone()}
+                                                    <button
+                                                        type="button"
+                                                        class="dict-details-toggle"
+                                                        title="Show details"
+                                                        on:click=move |_| {
+                                                            set_details_open.update(|s| {
+                                                                if !s.insert(id) { s.remove(&id); }
+                                                            });
+                                                        }
+                                                    >
+                                                        {move || if details_open.get().contains(&id) {
+                                                            "▾"
+                                                        } else { "▸" }}
+                                                    </button>
+                                                </td>
                                                 <td>{tc}</td>
                                                 <td><button type="button" on:click=on_delete>"Delete"</button></td>
                                             </tr>
+                                            {move || details_open.get().contains(&id).then(|| {
+                                                let row = dicts.get_untracked()
+                                                    .iter()
+                                                    .find(|x| x.id == id)
+                                                    .cloned();
+                                                let Some(row) = row else {
+                                                    return view! { <tr></tr> }.into_any();
+                                                };
+                                                view! {
+                                                    <DictDetailsRow
+                                                        row=row
+                                                        refresh=refresh
+                                                    />
+                                                }.into_any()
+                                            })}
                                         }
                                     }).collect_view()}
                                 </tbody>
@@ -1206,6 +1251,122 @@ async fn yield_to_browser() {
         let _ = win.request_animation_frame(resolve_cb.as_ref().unchecked_ref());
     });
     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+#[component]
+fn DictDetailsRow(
+    row: Dictionary,
+    refresh: impl Fn() + Copy + 'static + Send + Sync,
+) -> impl IntoView {
+    let id = row.id;
+    let initial_notes = row.user_notes.clone().unwrap_or_default();
+    let (notes, set_notes) = signal::<String>(initial_notes.clone());
+    let (saving, set_saving) = signal::<bool>(false);
+    let (saved_at, set_saved_at) = signal::<Option<&'static str>>(None);
+
+    let on_input = move |ev: leptos::ev::Event| {
+        set_notes.set(leptos::prelude::event_target_value(&ev));
+        set_saved_at.set(None);
+    };
+
+    let on_save = move |_| {
+        set_saving.set(true);
+        let value = notes.get_untracked();
+        spawn_local(async move {
+            let args = js_sys::Object::new();
+            let _ = js_sys::Reflect::set(
+                &args,
+                &JsValue::from_str("id"),
+                &JsValue::from_f64(id as f64),
+            );
+            if value.is_empty() {
+                let _ = js_sys::Reflect::set(
+                    &args,
+                    &JsValue::from_str("notes"),
+                    &JsValue::NULL,
+                );
+            } else {
+                let _ = js_sys::Reflect::set(
+                    &args,
+                    &JsValue::from_str("notes"),
+                    &JsValue::from_str(&value),
+                );
+            }
+            match invoke("set_dictionary_notes", args.into()).await {
+                Ok(_) => {
+                    set_saved_at.set(Some("Saved"));
+                    refresh();
+                }
+                Err(e) => {
+                    web_sys::console::warn_1(
+                        &format!("set_dictionary_notes: {}", stringify_err(e)).into(),
+                    );
+                    set_saved_at.set(Some("Save failed"));
+                }
+            }
+            set_saving.set(false);
+        });
+    };
+
+    let revision = row.revision.clone().unwrap_or_else(|| "—".into());
+    let description = row
+        .description
+        .clone()
+        .unwrap_or_else(|| "(no description in index.json)".into());
+    let attribution = row.attribution.clone();
+    let url = row.url.clone();
+
+    view! {
+        <tr class="dict-details-row">
+            <td colspan="5">
+                <div class="dict-details">
+                    <dl class="dict-details-meta">
+                        <dt>"Format"</dt>
+                        <dd>{format!("v{}", row.format_version)}</dd>
+                        <dt>"Revision"</dt>
+                        <dd>{revision}</dd>
+                        {attribution.map(|a| view! {
+                            <dt>"Attribution"</dt>
+                            <dd>{a}</dd>
+                        })}
+                        {url.map(|u| {
+                            let href = u.clone();
+                            view! {
+                                <dt>"URL"</dt>
+                                <dd>
+                                    <a href=href target="_blank" rel="noopener">{u}</a>
+                                </dd>
+                            }
+                        })}
+                        <dt>"Description"</dt>
+                        <dd class="dict-details-description">{description}</dd>
+                    </dl>
+                    <label class="dict-details-notes-label">
+                        "Your notes"
+                        <textarea
+                            class="dict-details-notes"
+                            rows="3"
+                            prop:value=move || notes.get()
+                            on:input=on_input
+                            placeholder="e.g. \"use only for kokugo lookups\""
+                        />
+                    </label>
+                    <div class="row">
+                        <button
+                            type="button"
+                            on:click=on_save
+                            prop:disabled=move || saving.get()
+                        >
+                            {move || if saving.get() { "Saving…" } else { "Save notes" }}
+                        </button>
+                        {move || saved_at.get().map(|s| view! {
+                            <span class="muted dict-details-saved">{s}</span>
+                        })}
+                    </div>
+                </div>
+            </td>
+        </tr>
+    }
 }
 
 async fn send_reorder(ordered_ids: Vec<i64>) {

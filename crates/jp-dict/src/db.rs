@@ -88,6 +88,9 @@ impl Db {
 const MIGRATIONS: &[&str] = &[
     // v1 — Phase 5 subpiece 1: dictionary store
     include_str!("migrations/001_initial.sql"),
+    // v2 — Phase 5.5: dictionary description / attribution / url /
+    //                 user_notes for the details panel
+    include_str!("migrations/002_dict_metadata.sql"),
 ];
 
 #[cfg(test)]

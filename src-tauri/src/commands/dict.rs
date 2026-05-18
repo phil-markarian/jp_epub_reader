@@ -349,6 +349,18 @@ pub fn delete_dictionary(
 }
 
 #[tauri::command]
+pub fn set_dictionary_notes(
+    id: i64,
+    notes: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .dict_db
+        .set_dictionary_notes(id, notes.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn set_dictionary_enabled(
     id: i64,
     enabled: bool,
