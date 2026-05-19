@@ -606,6 +606,13 @@ details[open] > summary::before { transform: rotate(90deg); }
   background: rgba(127, 127, 127, 0.12);
 }
 .dict-mini-btn:disabled { opacity: 0.5; cursor: default; }
+.dict-resume-btn {
+  background: rgba(82, 170, 100, 0.12);
+  border-color: rgba(82, 170, 100, 0.55);
+  color: #2a7a36;
+  font-weight: 600;
+}
+.dict-resume-btn:hover { background: rgba(82, 170, 100, 0.22); }
 .dict-cancel-btn {
   background: rgba(176, 0, 32, 0.08);
   border: 1px solid rgba(176, 0, 32, 0.4);

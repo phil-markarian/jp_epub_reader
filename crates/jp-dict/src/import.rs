@@ -284,6 +284,27 @@ impl Db {
             )
             .map_err(|e| Error::Other(format!("insert dictionary: {e}")))?;
             let dict_id = tx.last_insert_rowid();
+            // Apply seed-catalog metadata for any field that came
+            // back NULL from index.json. Catalog values never
+            // overwrite real index.json data because of the
+            // COALESCE — current row already has the index value
+            // populated (or NULL) for each column.
+            if let Some(entry) = crate::catalog::lookup(&index.title) {
+                tx.execute(
+                    "UPDATE dictionary
+                        SET description = COALESCE(description, ?),
+                            attribution = COALESCE(attribution, ?),
+                            url         = COALESCE(url, ?)
+                      WHERE id = ?",
+                    rusqlite::params![
+                        entry.description.as_deref(),
+                        entry.attribution.as_deref(),
+                        entry.url.as_deref(),
+                        dict_id,
+                    ],
+                )
+                .map_err(|e| Error::Other(format!("apply catalog: {e}")))?;
+            }
 
             let mut bytes_done: u64 = 0;
             let progress_for_bank = |bank_size: u64,

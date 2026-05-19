@@ -500,6 +500,21 @@ pub async fn reimport_dictionary(
     .map_err(|e| format!("reimport task failed: {e}"))
 }
 
+/// Run the seed-catalog over every installed dict, filling NULL
+/// description / attribution / url fields where the catalog has
+/// a match. User-set values are never overwritten (UPDATE uses
+/// COALESCE). Returns the number of rows that were touched.
+#[tauri::command]
+pub async fn apply_catalog_to_dictionaries(
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let db = state.dict_db.clone();
+    tokio::task::spawn_blocking(move || db.apply_catalog_to_all())
+        .await
+        .map_err(|e| format!("apply-catalog task failed: {e}"))?
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn set_dictionary_notes(
     id: i64,

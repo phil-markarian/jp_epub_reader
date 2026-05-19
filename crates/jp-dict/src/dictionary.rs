@@ -123,6 +123,55 @@ impl Db {
         })
     }
 
+    /// For every row, look up the seed catalog by title and fill
+    /// in any description / attribution / url fields that are
+    /// currently NULL. Returns the number of rows actually
+    /// touched. Idempotent — runs that find nothing to fill set
+    /// 0 rows. User-set fields aren't affected because we only
+    /// write where the existing value IS NULL.
+    pub fn apply_catalog_to_all(&self) -> Result<usize> {
+        self.with_conn_mut(|conn| {
+            let mut updated = 0usize;
+            // Snapshot ids + titles first so we don't hold the
+            // prepared statement open while running per-row
+            // UPDATEs.
+            let mut rows: Vec<(i64, String)> = Vec::new();
+            {
+                let mut stmt = conn
+                    .prepare("SELECT id, name FROM dictionary")
+                    .map_err(|e| Error::Other(e.to_string()))?;
+                let it = stmt
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                    .map_err(|e| Error::Other(e.to_string()))?;
+                for row in it {
+                    rows.push(row.map_err(|e| Error::Other(e.to_string()))?);
+                }
+            }
+            for (id, title) in rows {
+                let Some(entry) = crate::catalog::lookup(&title) else { continue };
+                let n = conn
+                    .execute(
+                        "UPDATE dictionary
+                            SET description = COALESCE(description, ?),
+                                attribution = COALESCE(attribution, ?),
+                                url         = COALESCE(url, ?)
+                          WHERE id = ?",
+                        rusqlite::params![
+                            entry.description.as_deref(),
+                            entry.attribution.as_deref(),
+                            entry.url.as_deref(),
+                            id,
+                        ],
+                    )
+                    .map_err(|e| Error::Other(format!("apply catalog: {e}")))?;
+                if n > 0 {
+                    updated += 1;
+                }
+            }
+            Ok(updated)
+        })
+    }
+
     pub fn set_dictionary_notes(&self, id: i64, notes: Option<&str>) -> Result<()> {
         self.with_conn(|c| {
             c.execute(

@@ -58,6 +58,7 @@ pub fn run() {
             commands::dict::reimport_dictionary,
             commands::dict::set_dictionary_enabled,
             commands::dict::set_dictionary_notes,
+            commands::dict::apply_catalog_to_dictionaries,
             commands::dict::reorder_dictionaries,
             commands::dict::get_dict_last_folder,
             commands::dict::clear_dict_last_folder,

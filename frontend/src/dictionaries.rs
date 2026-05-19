@@ -114,6 +114,17 @@ impl QueueStatus {
     }
 }
 
+/// Snapshot of the leftover work after a Cancel, so the user can
+/// hit "Resume" instead of starting over. Each variant carries
+/// just the remaining inputs (paths for import, ids for the bulk
+/// dict-side ops), plus a heading string for the modal.
+#[derive(Clone, Debug)]
+enum ResumePayload {
+    Import { paths: Vec<DictPreview> },
+    Reimport { dicts: Vec<Dictionary> },
+    Delete { dicts: Vec<Dictionary> },
+}
+
 /// One row of the import queue. The status is its own signal so the
 /// table doesn't re-render every row when one row's status flips —
 /// fine-grained reactivity is what keeps the UI responsive when the
@@ -193,6 +204,11 @@ pub fn DictionariesPanel() -> impl IntoView {
     // Stays in this state until the user explicitly expands or the
     // run finishes.
     let (queue_minimized, set_queue_minimized) = signal::<bool>(false);
+    // Resume support: when a run is cancelled mid-batch, the
+    // unfinished work is parked here so the user can click "Resume"
+    // instead of starting over. Variant encodes which operation +
+    // payload the resume should re-run.
+    let (resumable, set_resumable) = signal::<Option<ResumePayload>>(None);
     let (counts, set_counts) = signal::<(usize, usize, usize, usize, usize)>((0, 0, 0, 0, 0));
     // (imported, skipped, failed, cancelled, done) — derived from
     // row signal updates inside the import loop.
@@ -334,13 +350,9 @@ pub fn DictionariesPanel() -> impl IntoView {
         });
     };
 
-    let on_import_selected = move |_| {
-        let sel_set = selected.get();
-        let chosen: Vec<DictPreview> = preview
-            .get()
-            .into_iter()
-            .filter(|r| sel_set.contains(&r.path))
-            .collect();
+    // Core import loop, factored out so the "Resume" button can
+    // re-enter it with whatever was left over after a Cancel.
+    let start_import_run = move |chosen: Vec<DictPreview>| {
         if chosen.is_empty() {
             set_banner.set(Some("Nothing selected.".into()));
             return;
@@ -370,9 +382,17 @@ pub fn DictionariesPanel() -> impl IntoView {
         set_counts.set((0, 0, 0, 0, 0));
         set_busy.set(true);
         set_banner.set(None);
+        set_resumable.set(None);
         // Reset cancel flag for the new batch.
         cancel_write.set(false);
 
+        // Capture parallel clones for the resume snapshot at the
+        // end of the loop: `chosen` is the preview data we need to
+        // re-queue, and rows_for_resume mirrors `rows` so the
+        // status signals are still readable after the loop has
+        // consumed the iterator.
+        let chosen = chosen.clone();
+        let rows_for_resume = rows.clone();
         spawn_local(async move {
             let mut imported = 0usize;
             let mut skipped = 0usize;
@@ -492,6 +512,20 @@ pub fn DictionariesPanel() -> impl IntoView {
                 cancelled,
                 imported + skipped + failed + cancelled,
             ));
+            // If anything was cancelled mid-run, stash a resume
+            // payload so the user can click "Resume" without
+            // re-picking the folder + reselecting.
+            let leftover_rows: Vec<DictPreview> = chosen
+                .iter()
+                .zip(rows_for_resume.iter())
+                .filter(|(_p, qrow)| qrow.status.get_untracked() == QueueStatus::Cancelled)
+                .map(|(p, _)| p.clone())
+                .collect();
+            if !leftover_rows.is_empty() {
+                set_resumable.set(Some(ResumePayload::Import { paths: leftover_rows }));
+            } else {
+                set_resumable.set(None);
+            }
             let summary = if cancelled > 0 {
                 format!(
                     "{total} queued: {imported} imported, {skipped} skipped, {failed} failed, {cancelled} cancelled.",
@@ -520,6 +554,212 @@ pub fn DictionariesPanel() -> impl IntoView {
     };
 
 
+    // Click handler used by the "Import selected (N)" button.
+    // The Resume button calls start_import_run directly with its
+    // payload, bypassing the selected-set filter.
+    let on_import_selected = move |_| {
+        let sel_set = selected.get();
+        let chosen: Vec<DictPreview> = preview
+            .get()
+            .into_iter()
+            .filter(|r| sel_set.contains(&r.path))
+            .collect();
+        start_import_run(chosen);
+    };
+
+    // Bulk reimport runner — used both by the "Reimport all"
+    // button in the Installed header and by Resume after a
+    // cancelled reimport batch.
+    let start_reimport_run = move |snap: Vec<Dictionary>| {
+        if snap.is_empty() { return; }
+        let qrows: Vec<QueueRow> = snap
+            .iter()
+            .enumerate()
+            .map(|(i, d)| QueueRow {
+                index: i + 1,
+                path: format!("dict:{}", d.id),
+                name: d.name.clone(),
+                status: ArcRwSignal::new(QueueStatus::Queued),
+                error: ArcRwSignal::new(None),
+                progress: ArcRwSignal::new(None),
+            })
+            .collect();
+        let total = qrows.len();
+        set_queue_heading.set("Reimporting dictionaries");
+        set_queue_rows.set(qrows.clone());
+        set_counts.set((0, 0, 0, 0, 0));
+        set_busy.set(true);
+        set_installed_banner.set(None);
+        set_resumable.set(None);
+        let snap_ids: Vec<i64> = snap.iter().map(|d| d.id).collect();
+        cancel_write.set(false);
+        spawn_local(async move {
+            let mut imported = 0usize;
+            let mut failed = 0usize;
+            let mut cancelled = 0usize;
+            for (i, id) in snap_ids.iter().enumerate() {
+                if i >= qrows.len() { break; }
+                let row = &qrows[i];
+                if cancel_read.get_untracked() {
+                    row.status.set(QueueStatus::Cancelled);
+                    cancelled += 1;
+                    set_counts.set((imported, 0, failed, cancelled, imported + failed + cancelled));
+                    continue;
+                }
+                row.status.set(QueueStatus::Running);
+                yield_to_browser().await;
+                let args = js_sys::Object::new();
+                let _ = js_sys::Reflect::set(
+                    &args,
+                    &JsValue::from_str("id"),
+                    &JsValue::from_f64(*id as f64),
+                );
+                match invoke("reimport_dictionary", args.into()).await {
+                    Ok(_) => {
+                        imported += 1;
+                        row.status.set(QueueStatus::Imported);
+                        refresh();
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        let msg = stringify_err(e);
+                        row.error.set(Some(msg));
+                        row.status.set(QueueStatus::Failed);
+                    }
+                }
+                set_counts.set((imported, 0, failed, cancelled, imported + failed + cancelled));
+            }
+            set_busy.set(false);
+            let leftover: Vec<Dictionary> = snap
+                .iter()
+                .zip(qrows.iter())
+                .filter(|(_d, q)| q.status.get_untracked() == QueueStatus::Cancelled)
+                .map(|(d, _)| d.clone())
+                .collect();
+            if !leftover.is_empty() {
+                set_resumable.set(Some(ResumePayload::Reimport { dicts: leftover }));
+            } else {
+                set_resumable.set(None);
+            }
+            let summary = if cancelled > 0 {
+                format!(
+                    "Reimported {imported} of {total}; {cancelled} cancelled{}",
+                    if failed > 0 { format!(", {failed} failed") } else { String::new() }
+                )
+            } else {
+                format!(
+                    "Reimported {imported} of {total}{}",
+                    if failed > 0 { format!(" ({failed} failed)") } else { String::new() }
+                )
+            };
+            set_installed_banner.set(Some(summary));
+            refresh();
+        });
+    };
+
+    // Bulk delete runner — same pattern. (See start_reimport_run.)
+    let start_delete_run = move |snap: Vec<Dictionary>| {
+        if snap.is_empty() { return; }
+        let qrows: Vec<QueueRow> = snap
+            .iter()
+            .enumerate()
+            .map(|(i, d)| QueueRow {
+                index: i + 1,
+                path: format!("dict:{}", d.id),
+                name: d.name.clone(),
+                status: ArcRwSignal::new(QueueStatus::Queued),
+                error: ArcRwSignal::new(None),
+                progress: ArcRwSignal::new(None),
+            })
+            .collect();
+        let total = qrows.len();
+        set_queue_heading.set("Deleting dictionaries");
+        set_queue_rows.set(qrows.clone());
+        set_counts.set((0, 0, 0, 0, 0));
+        set_busy.set(true);
+        set_installed_banner.set(None);
+        set_resumable.set(None);
+        let snap_ids: Vec<i64> = snap.iter().map(|d| d.id).collect();
+        cancel_write.set(false);
+        spawn_local(async move {
+            let mut deleted = 0usize;
+            let mut failed = 0usize;
+            let mut cancelled = 0usize;
+            for (i, id) in snap_ids.iter().enumerate() {
+                if i >= qrows.len() { break; }
+                let row = &qrows[i];
+                if cancel_read.get_untracked() {
+                    row.status.set(QueueStatus::Cancelled);
+                    cancelled += 1;
+                    set_counts.set((deleted, 0, failed, cancelled, deleted + failed + cancelled));
+                    continue;
+                }
+                row.status.set(QueueStatus::Running);
+                yield_to_browser().await;
+                let args = js_sys::Object::new();
+                let _ = js_sys::Reflect::set(
+                    &args,
+                    &JsValue::from_str("id"),
+                    &JsValue::from_f64(*id as f64),
+                );
+                let id_for_remove = *id;
+                match invoke("delete_dictionary", args.into()).await {
+                    Ok(_) => {
+                        deleted += 1;
+                        row.status.set(QueueStatus::Deleted);
+                        set_dicts.update(|d| {
+                            d.retain(|x| x.id != id_for_remove);
+                        });
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        let msg = stringify_err(e);
+                        row.error.set(Some(msg));
+                        row.status.set(QueueStatus::Failed);
+                    }
+                }
+                set_counts.set((deleted, 0, failed, cancelled, deleted + failed + cancelled));
+            }
+            set_busy.set(false);
+            let leftover: Vec<Dictionary> = snap
+                .iter()
+                .zip(qrows.iter())
+                .filter(|(_d, q)| q.status.get_untracked() == QueueStatus::Cancelled)
+                .map(|(d, _)| d.clone())
+                .collect();
+            if !leftover.is_empty() {
+                set_resumable.set(Some(ResumePayload::Delete { dicts: leftover }));
+            } else {
+                set_resumable.set(None);
+            }
+            let summary = if cancelled > 0 {
+                format!(
+                    "Deleted {deleted} of {total}; {cancelled} cancelled{}",
+                    if failed > 0 { format!(", {failed} failed") } else { String::new() }
+                )
+            } else {
+                format!(
+                    "Deleted {deleted} of {total}{}",
+                    if failed > 0 { format!(" ({failed} failed)") } else { String::new() }
+                )
+            };
+            set_installed_banner.set(Some(summary));
+            refresh();
+        });
+    };
+
+    // Resume handler. Reads the parked payload + reruns the
+    // appropriate runner with just the leftover items.
+    let on_resume = move |_| {
+        let Some(payload) = resumable.get() else { return };
+        set_resumable.set(None);
+        match payload {
+            ResumePayload::Import { paths } => start_import_run(paths),
+            ResumePayload::Reimport { dicts } => start_reimport_run(dicts),
+            ResumePayload::Delete { dicts } => start_delete_run(dicts),
+        }
+    };
+
     let toggle_all = move |checked: bool| {
         if checked {
             let mut sel = std::collections::HashSet::new();
@@ -537,6 +777,7 @@ pub fn DictionariesPanel() -> impl IntoView {
     let clear_queue = move |_| {
         set_queue_rows.set(Vec::new());
         set_counts.set((0, 0, 0, 0, 0));
+        set_resumable.set(None);
         // Reset the minimized flag so the next operation opens
         // full rather than going straight to dock-bottom mode.
         set_queue_minimized.set(false);
@@ -745,6 +986,24 @@ pub fn DictionariesPanel() -> impl IntoView {
                                 >
                                     "Expand"
                                 </button>
+                                {move || (!busy.get() && resumable.get().is_some()).then(|| {
+                                    let n = match resumable.get_untracked().as_ref() {
+                                        Some(ResumePayload::Import { paths }) => paths.len(),
+                                        Some(ResumePayload::Reimport { dicts }) => dicts.len(),
+                                        Some(ResumePayload::Delete { dicts }) => dicts.len(),
+                                        None => 0,
+                                    };
+                                    view! {
+                                        <button
+                                            type="button"
+                                            class="dict-mini-btn dict-resume-btn"
+                                            on:click=on_resume
+                                            title="Pick up where the cancelled run left off"
+                                        >
+                                            {format!("Resume ({n})")}
+                                        </button>
+                                    }
+                                })}
                                 {move || (!busy.get()).then(|| view! {
                                     <button
                                         type="button"
@@ -918,6 +1177,11 @@ pub fn DictionariesPanel() -> impl IntoView {
                                             .filter(|p| !p.starts_with("dict:"))
                                             .collect();
                                         let failed_count = failed_paths.len();
+                                        let resume_count = resumable.get().as_ref().map(|p| match p {
+                                            ResumePayload::Import { paths } => paths.len(),
+                                            ResumePayload::Reimport { dicts } => dicts.len(),
+                                            ResumePayload::Delete { dicts } => dicts.len(),
+                                        });
                                         view! {
                                             {(failed_count > 0).then(|| {
                                                 let failed_paths = failed_paths.clone();
@@ -930,6 +1194,16 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                         {format!("Move failed ({failed_count})…")}
                                                     </button>
                                                 }
+                                            })}
+                                            {resume_count.map(|n| view! {
+                                                <button
+                                                    type="button"
+                                                    class="dict-resume-btn"
+                                                    on:click=on_resume
+                                                    title="Pick up where the cancelled run left off"
+                                                >
+                                                    {format!("Resume ({n} left)")}
+                                                </button>
                                             })}
                                             <button
                                                 type="button"
@@ -1095,8 +1369,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                         let on_delete_all = move |_| {
                             // Two-click confirm: first click arms,
                             // second click within 5s starts the wipe
-                            // (which goes through the modal queue
-                            // for progress).
+                            // via the runner.
                             let armed_at = window_now_ms();
                             let prev = window_get_number("__JP_DICT_DELETE_ALL_AT")
                                 .unwrap_or(0.0);
@@ -1109,196 +1382,12 @@ pub fn DictionariesPanel() -> impl IntoView {
                                 return;
                             }
                             window_set_number("__JP_DICT_DELETE_ALL_AT", 0.0);
-
-                            // Build modal queue from the snapshot so
-                            // progress shows one row at a time.
-                            let snap = snapshot_for_delete.clone();
-                            let qrows: Vec<QueueRow> = snap
-                                .iter()
-                                .enumerate()
-                                .map(|(i, d)| QueueRow {
-                                    index: i + 1,
-                                    path: format!("dict:{}", d.id),
-                                    name: d.name.clone(),
-                                    status: ArcRwSignal::new(QueueStatus::Queued),
-                                    error: ArcRwSignal::new(None),
-                                    progress: ArcRwSignal::new(None),
-                                })
-                                .collect();
-                            let total = qrows.len();
-                            set_queue_heading.set("Deleting dictionaries");
-                            set_queue_rows.set(qrows.clone());
-                            set_counts.set((0, 0, 0, 0, 0));
-                            set_busy.set(true);
-                            set_installed_banner.set(None);
-
-                            let snap_ids: Vec<i64> = snap.iter().map(|d| d.id).collect();
-                            cancel_write.set(false);
-                            spawn_local(async move {
-                                let mut deleted = 0usize;
-                                let mut failed = 0usize;
-                                let mut cancelled = 0usize;
-                                for (i, id) in snap_ids.iter().enumerate() {
-                                    if i >= qrows.len() { break; }
-                                    let row = &qrows[i];
-                                    if cancel_read.get_untracked() {
-                                        row.status.set(QueueStatus::Cancelled);
-                                        cancelled += 1;
-                                        set_counts.set((
-                                            deleted,
-                                            0,
-                                            failed,
-                                            cancelled,
-                                            deleted + failed + cancelled,
-                                        ));
-                                        continue;
-                                    }
-                                    row.status.set(QueueStatus::Running);
-                                    yield_to_browser().await;
-                                    let args = js_sys::Object::new();
-                                    let _ = js_sys::Reflect::set(
-                                        &args,
-                                        &JsValue::from_str("id"),
-                                        &JsValue::from_f64(*id as f64),
-                                    );
-                                    let id_for_remove = *id;
-                                    match invoke("delete_dictionary", args.into()).await {
-                                        Ok(_) => {
-                                            deleted += 1;
-                                            row.status.set(QueueStatus::Deleted);
-                                            // Live update: drop the
-                                            // row from the Installed
-                                            // signal so its counter
-                                            // ticks down right away.
-                                            set_dicts.update(|d| {
-                                                d.retain(|x| x.id != id_for_remove);
-                                            });
-                                        }
-                                        Err(e) => {
-                                            failed += 1;
-                                            let msg = stringify_err(e);
-                                            row.error.set(Some(msg));
-                                            row.status.set(QueueStatus::Failed);
-                                        }
-                                    }
-                                    set_counts.set((
-                                        deleted,
-                                        0,
-                                        failed,
-                                        cancelled,
-                                        deleted + failed + cancelled,
-                                    ));
-                                }
-                                set_busy.set(false);
-                                let summary = if cancelled > 0 {
-                                    format!(
-                                        "Deleted {deleted} of {total}; {cancelled} cancelled{}",
-                                        if failed > 0 { format!(", {failed} failed") } else { String::new() }
-                                    )
-                                } else {
-                                    format!(
-                                        "Deleted {deleted} of {total}{}",
-                                        if failed > 0 { format!(" ({failed} failed)") } else { String::new() }
-                                    )
-                                };
-                                set_installed_banner.set(Some(summary));
-                                refresh();
-                            });
+                            start_delete_run(snapshot_for_delete.clone());
                         };
 
                         let snapshot_for_reimport = rows.iter().cloned().collect::<Vec<_>>();
                         let on_reimport_all = move |_| {
-                            let snap = snapshot_for_reimport.clone();
-                            if snap.is_empty() { return; }
-                            let qrows: Vec<QueueRow> = snap
-                                .iter()
-                                .enumerate()
-                                .map(|(i, d)| QueueRow {
-                                    index: i + 1,
-                                    path: format!("dict:{}", d.id),
-                                    name: d.name.clone(),
-                                    status: ArcRwSignal::new(QueueStatus::Queued),
-                                    error: ArcRwSignal::new(None),
-                                    progress: ArcRwSignal::new(None),
-                                })
-                                .collect();
-                            let total = qrows.len();
-                            set_queue_heading.set("Reimporting dictionaries");
-                            set_queue_rows.set(qrows.clone());
-                            set_counts.set((0, 0, 0, 0, 0));
-                            set_busy.set(true);
-                            set_installed_banner.set(None);
-
-                            let snap_ids: Vec<i64> = snap.iter().map(|d| d.id).collect();
-                            cancel_write.set(false);
-                            spawn_local(async move {
-                                let mut imported = 0usize;
-                                let mut failed = 0usize;
-                                let mut cancelled = 0usize;
-                                for (i, id) in snap_ids.iter().enumerate() {
-                                    if i >= qrows.len() { break; }
-                                    let row = &qrows[i];
-                                    if cancel_read.get_untracked() {
-                                        row.status.set(QueueStatus::Cancelled);
-                                        cancelled += 1;
-                                        set_counts.set((
-                                            imported,
-                                            0,
-                                            failed,
-                                            cancelled,
-                                            imported + failed + cancelled,
-                                        ));
-                                        continue;
-                                    }
-                                    row.status.set(QueueStatus::Running);
-                                    yield_to_browser().await;
-                                    let args = js_sys::Object::new();
-                                    let _ = js_sys::Reflect::set(
-                                        &args,
-                                        &JsValue::from_str("id"),
-                                        &JsValue::from_f64(*id as f64),
-                                    );
-                                    match invoke("reimport_dictionary", args.into()).await {
-                                        Ok(_) => {
-                                            imported += 1;
-                                            row.status.set(QueueStatus::Imported);
-                                            // Refresh the installed
-                                            // list so the row's term
-                                            // count + source_path
-                                            // (newly captured) show
-                                            // up immediately.
-                                            refresh();
-                                        }
-                                        Err(e) => {
-                                            failed += 1;
-                                            let msg = stringify_err(e);
-                                            row.error.set(Some(msg));
-                                            row.status.set(QueueStatus::Failed);
-                                        }
-                                    }
-                                    set_counts.set((
-                                        imported,
-                                        0,
-                                        failed,
-                                        cancelled,
-                                        imported + failed + cancelled,
-                                    ));
-                                }
-                                set_busy.set(false);
-                                let summary = if cancelled > 0 {
-                                    format!(
-                                        "Reimported {imported} of {total}; {cancelled} cancelled{}",
-                                        if failed > 0 { format!(", {failed} failed") } else { String::new() }
-                                    )
-                                } else {
-                                    format!(
-                                        "Reimported {imported} of {total}{}",
-                                        if failed > 0 { format!(" ({failed} failed)") } else { String::new() }
-                                    )
-                                };
-                                set_installed_banner.set(Some(summary));
-                                refresh();
-                            });
+                            start_reimport_run(snapshot_for_reimport.clone());
                         };
                         view! {
                             {move || installed_banner.get().map(|b| view! {
