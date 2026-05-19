@@ -460,6 +460,23 @@ pub fn DictionariesPanel() -> impl IntoView {
                     cancelled,
                     imported + skipped + failed + cancelled,
                 ));
+                // Live UI update: if this row imported successfully,
+                // flip its preview status to "already-imported" so
+                // the "To install" counter ticks down and the
+                // Installed list refreshes mid-batch (minimized or
+                // not, the rest of the panel reflects reality).
+                if next == QueueStatus::Imported {
+                    let row_path = row.path.clone();
+                    set_preview.update(|rows| {
+                        for r in rows.iter_mut() {
+                            if r.path == row_path {
+                                r.status = "already-imported".into();
+                            }
+                        }
+                    });
+                    set_selected.update(|s| { s.remove(&row_path); });
+                    refresh();
+                }
             }
             // Drain any remaining rows (the loop sets each to
             // Cancelled, but `iter` may have unyielded items if
@@ -1144,10 +1161,18 @@ pub fn DictionariesPanel() -> impl IntoView {
                                         &JsValue::from_str("id"),
                                         &JsValue::from_f64(*id as f64),
                                     );
+                                    let id_for_remove = *id;
                                     match invoke("delete_dictionary", args.into()).await {
                                         Ok(_) => {
                                             deleted += 1;
                                             row.status.set(QueueStatus::Deleted);
+                                            // Live update: drop the
+                                            // row from the Installed
+                                            // signal so its counter
+                                            // ticks down right away.
+                                            set_dicts.update(|d| {
+                                                d.retain(|x| x.id != id_for_remove);
+                                            });
                                         }
                                         Err(e) => {
                                             failed += 1;
@@ -1237,6 +1262,12 @@ pub fn DictionariesPanel() -> impl IntoView {
                                         Ok(_) => {
                                             imported += 1;
                                             row.status.set(QueueStatus::Imported);
+                                            // Refresh the installed
+                                            // list so the row's term
+                                            // count + source_path
+                                            // (newly captured) show
+                                            // up immediately.
+                                            refresh();
                                         }
                                         Err(e) => {
                                             failed += 1;
