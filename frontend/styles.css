@@ -529,6 +529,83 @@ details[open] > summary::before { transform: rotate(90deg); }
   gap: 8px;
   margin-top: 4px;
 }
+.dict-modal-count { margin-left: auto; }
+.dict-modal-minimize {
+  margin-left: 8px;
+  padding: 2px 10px;
+  font-size: 1.1em;
+  line-height: 1;
+}
+
+/* Minimized dock strip pinned to the bottom of the viewport so
+ * the user can scroll/click the rest of the panel while a bulk op
+ * runs in the background. Mirrors the modal's color palette. */
+.dict-mini-dock {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #ffffff;
+  color: #111111;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  font-size: 0.9em;
+}
+@media (prefers-color-scheme: dark) {
+  .dict-mini-dock {
+    background: #1c1c1e;
+    color: #e8e8e8;
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+}
+.dict-mini-info {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dict-mini-heading { font-weight: 600; }
+.dict-mini-name { overflow: hidden; text-overflow: ellipsis; }
+.dict-mini-bar {
+  flex: 0 0 200px;
+  height: 6px;
+  background: rgba(127, 127, 127, 0.2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.dict-mini-fill {
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    rgba(116, 163, 255, 0.85),
+    rgba(82, 170, 100, 0.85)
+  );
+  transition: width 200ms ease;
+}
+.dict-mini-btn {
+  background: transparent;
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  color: inherit;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.dict-mini-btn:hover:not(:disabled) {
+  background: rgba(127, 127, 127, 0.12);
+}
+.dict-mini-btn:disabled { opacity: 0.5; cursor: default; }
 .dict-cancel-btn {
   background: rgba(176, 0, 32, 0.08);
   border: 1px solid rgba(176, 0, 32, 0.4);

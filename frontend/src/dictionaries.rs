@@ -188,6 +188,11 @@ pub fn DictionariesPanel() -> impl IntoView {
     // path seeded queue_rows: import / reimport-all / delete-all.
     let (queue_heading, set_queue_heading) =
         signal::<&'static str>("Importing dictionaries");
+    // When true, the modal collapses into a dock-bottom strip that
+    // shows just the progress bar + current row + Cancel + restore.
+    // Stays in this state until the user explicitly expands or the
+    // run finishes.
+    let (queue_minimized, set_queue_minimized) = signal::<bool>(false);
     let (counts, set_counts) = signal::<(usize, usize, usize, usize, usize)>((0, 0, 0, 0, 0));
     // (imported, skipped, failed, cancelled, done) — derived from
     // row signal updates inside the import loop.
@@ -515,6 +520,9 @@ pub fn DictionariesPanel() -> impl IntoView {
     let clear_queue = move |_| {
         set_queue_rows.set(Vec::new());
         set_counts.set((0, 0, 0, 0, 0));
+        // Reset the minimized flag so the next operation opens
+        // full rather than going straight to dock-bottom mode.
+        set_queue_minimized.set(false);
     };
 
     // Prompt for a target folder, then move the given list of zip
@@ -644,10 +652,9 @@ pub fn DictionariesPanel() -> impl IntoView {
                 </div>
                 {move || banner.get().map(|b| view! { <div class="banner">{b}</div> })}
 
-                // Modal import queue. Shown whenever there are queue
-                // rows; busy controls Cancel vs Close button. The
-                // backdrop and `aria-modal` semantics block clicks
-                // on the rest of the page during import.
+                // Modal import queue OR minimized dock strip — same
+                // queue state, two skins. Minimized strip lets the
+                // user keep working on other things in the panel.
                 {move || {
                     let rows = queue_rows.get();
                     if rows.is_empty() {
@@ -655,23 +662,103 @@ pub fn DictionariesPanel() -> impl IntoView {
                     }
                     let total = rows.len();
                     let (imp, skp, fld, can, _done) = counts.get();
-                    // Header counter shows only items the backend
-                    // actually processed (imported / skipped / failed);
-                    // cancelled rows don't count toward the X. After
-                    // a Cancel mid-run this reads e.g. "12 / 66" with
-                    // the rest reported in the counts line below.
                     let real_done = imp + skp + fld;
                     let pct = if total > 0 {
                         (real_done as f64 / total as f64 * 100.0) as i32
                     } else { 0 };
+
+                    // Name of the row currently in Running state —
+                    // surfaced in both skins so the user can tell
+                    // what's in flight at a glance.
+                    let running_name = rows
+                        .iter()
+                        .find(|r| r.status.get_untracked() == QueueStatus::Running)
+                        .map(|r| r.name.clone());
+
+                    let on_cancel = move |_| {
+                        cancel_write.set(true);
+                        spawn_local(async move {
+                            let _ = invoke(
+                                "cancel_dictionary_import",
+                                JsValue::from_str("{}"),
+                            ).await;
+                        });
+                    };
+
+                    if queue_minimized.get() {
+                        // Minimized: bottom-docked strip with a
+                        // single progress bar, current row name,
+                        // Cancel (while busy), restore button.
+                        let on_restore = move |_| set_queue_minimized.set(false);
+                        return view! {
+                            <div class="dict-mini-dock" role="status">
+                                <div class="dict-mini-info">
+                                    <span class="dict-mini-heading">
+                                        {move || queue_heading.get()}
+                                    </span>
+                                    <span class="muted dict-mini-count">
+                                        {format!(" {real_done} / {total}")}
+                                    </span>
+                                    {running_name.map(|n| view! {
+                                        <span class="dict-mini-name muted">
+                                            {format!(" — {n}")}
+                                        </span>
+                                    })}
+                                </div>
+                                <div class="dict-mini-bar">
+                                    <div class="dict-mini-fill"
+                                        style=format!("width: {pct}%")></div>
+                                </div>
+                                {move || busy.get().then(|| view! {
+                                    <button
+                                        type="button"
+                                        class="dict-cancel-btn dict-mini-btn"
+                                        on:click=on_cancel
+                                        prop:disabled=move || cancel_read.get()
+                                        title="Cancel current run"
+                                    >
+                                        {move || if cancel_read.get() { "Cancelling…" } else { "Cancel" }}
+                                    </button>
+                                })}
+                                <button
+                                    type="button"
+                                    class="dict-mini-btn"
+                                    on:click=on_restore
+                                    title="Show full progress"
+                                >
+                                    "Expand"
+                                </button>
+                                {move || (!busy.get()).then(|| view! {
+                                    <button
+                                        type="button"
+                                        class="dict-mini-btn"
+                                        on:click=clear_queue
+                                        title="Dismiss"
+                                    >
+                                        "Close"
+                                    </button>
+                                })}
+                            </div>
+                        }.into_any();
+                    }
+
+                    let on_minimize = move |_| set_queue_minimized.set(true);
                     view! {
                         <div class="dict-modal-backdrop" role="dialog" aria-modal="true">
                             <div class="dict-modal">
                                 <header class="dict-modal-header">
                                     <h3>{move || queue_heading.get()}</h3>
-                                    <span class="muted">
+                                    <span class="muted dict-modal-count">
                                         {format!("{real_done} / {total}")}
                                     </span>
+                                    <button
+                                        type="button"
+                                        class="dict-mini-btn dict-modal-minimize"
+                                        on:click=on_minimize
+                                        title="Minimize to bottom bar"
+                                    >
+                                        "—"
+                                    </button>
                                 </header>
                                 <div class="dict-progress-bar">
                                     <div class="dict-progress-fill"
@@ -784,25 +871,6 @@ pub fn DictionariesPanel() -> impl IntoView {
                                 </div>
                                 <footer class="dict-modal-footer">
                                     {move || if busy.get() {
-                                        let on_cancel = move |_| {
-                                            // 1) Stop the JS-side loop
-                                            //    from queueing more zips.
-                                            cancel_write.set(true);
-                                            // 2) Tell the backend to
-                                            //    abort the in-flight
-                                            //    import; the
-                                            //    transaction is
-                                            //    dropped without
-                                            //    commit so already-
-                                            //    written rows are
-                                            //    rolled back.
-                                            spawn_local(async move {
-                                                let _ = invoke(
-                                                    "cancel_dictionary_import",
-                                                    JsValue::from_str("{}"),
-                                                ).await;
-                                            });
-                                        };
                                         view! {
                                             <button
                                                 type="button"
@@ -1211,6 +1279,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                     type="button"
                                     class="dict-header-action"
                                     on:click=on_reimport_all
+                                    prop:disabled=move || busy.get()
                                     title="Reimport every dictionary from its saved source zip"
                                 >
                                     <RotateRightIcon />
@@ -1220,6 +1289,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                     type="button"
                                     class="dict-header-action dict-delete-all"
                                     on:click=on_delete_all
+                                    prop:disabled=move || busy.get()
                                     title="Delete every imported dictionary (two-click confirm)"
                                 >
                                     <TrashIcon />
@@ -1504,7 +1574,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                                     "dict-icon-btn"
                                                                 }
                                                             }
-                                                            prop:disabled=move || pending_actions.get().contains(&id)
+                                                            prop:disabled=move || busy.get() || pending_actions.get().contains(&id)
                                                             on:click=on_reimport
                                                             title="Reimport from source zip"
                                                             aria-label="Reimport dictionary"
@@ -1521,7 +1591,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                                     "dict-icon-btn dict-icon-danger"
                                                                 }
                                                             }
-                                                            prop:disabled=move || pending_actions.get().contains(&id)
+                                                            prop:disabled=move || busy.get() || pending_actions.get().contains(&id)
                                                             on:click=on_delete
                                                             title="Delete dictionary"
                                                             aria-label="Delete dictionary"
