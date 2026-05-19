@@ -841,6 +841,39 @@ button:disabled { color: #999; cursor: default; }
 .work .author { font-size: 0.95em; margin-top: 2px; }
 .work .ids { margin-top: 4px; font-size: 0.82em; }
 .work .actions { display: flex; gap: 6px; align-self: center; align-items: center; }
+
+/* Library row actions: keep Read / Open externally / trash icon
+ * the same height so the row reads as a single chip strip. */
+.library-row-actions > button {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  padding: 0 12px;
+}
+.library-row-trash {
+  background: transparent;
+  /* Keep the same neutral border + width as the other action
+   * buttons rather than carrying a destructive red outline. The
+   * two-click confirm prompt + trash glyph already make intent
+   * clear without the color signal. */
+  border-color: rgba(127, 127, 127, 0.35);
+  color: inherit;
+  width: 38px;
+  padding: 0 8px;
+}
+.library-row-trash:hover {
+  background: rgba(127, 127, 127, 0.12);
+}
+.library-row-trash .dict-svg-icon {
+  width: 14px;
+  height: 14px;
+}
+.library-row-confirm {
+  font-size: 0.85em;
+  font-weight: 600;
+}
 .imported-flash {
   background: #d8f3d8;
   color: #1f6f2c;

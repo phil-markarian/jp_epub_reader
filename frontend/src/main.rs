@@ -1,6 +1,7 @@
 mod app;
 mod collapsible;
 mod dictionaries;
+mod icons;
 mod reader;
 
 use leptos::prelude::*;

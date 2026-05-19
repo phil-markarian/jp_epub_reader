@@ -864,16 +864,21 @@ fn LibraryRow(
                 <div class="author">{author}</div>
                 <div class="ids muted">"work " {work_id}</div>
             </div>
-            <div class="actions">
+            <div class="actions library-row-actions">
                 <button type="button" on:click=on_read class="primary">"Read"</button>
                 <button type="button" on:click=on_open title="Open with system default (Apple Books)">"Open externally"</button>
                 <button
                     type="button"
-                    class="danger"
+                    class="library-row-trash"
                     on:click=on_remove
+                    aria-label=move || if armed.get() { "Confirm removal" } else { "Remove from library" }.to_string()
                     title=move || if armed.get() { "Click again to confirm" } else { "Remove from library" }.to_string()
                 >
-                    {move || if armed.get() { "Confirm?" } else { "✕" }}
+                    {move || if armed.get() {
+                        view! { <span class="library-row-confirm">"Confirm?"</span> }.into_any()
+                    } else {
+                        view! { <crate::icons::TrashIcon /> }.into_any()
+                    }}
                 </button>
             </div>
         </div>
