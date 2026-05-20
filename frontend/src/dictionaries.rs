@@ -59,6 +59,10 @@ struct Dictionary {
     url: Option<String>,
     #[serde(default)]
     user_notes: Option<String>,
+    /// Lookup-mode kind: "word" / "kanji" / "frequency" / "pitch" /
+    /// "name" / "grammar" / "other" / NULL for pre-v4 rows.
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1679,6 +1683,7 @@ pub fn DictionariesPanel() -> impl IntoView {
                                                     <span class="dict-row-chevron">
                                                         {move || if details_open.get().contains(&id) { "▾" } else { "▸" }}
                                                     </span>
+                                                    {kind_pill(d.kind.as_deref())}
                                                     {d.name.clone()}
                                                 </td>
                                                 <td>{tc}</td>
@@ -1776,6 +1781,25 @@ async fn yield_to_browser() {
     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
 }
 
+/// Small badge before each Installed row name showing the dict's
+/// lookup kind. `None` means the row predates migration v4 (or no
+/// override was set); we show a neutral "—" rather than guess.
+fn kind_pill(kind: Option<&str>) -> impl IntoView {
+    let (label, css) = match kind {
+        Some("word") => ("word", "kind-word"),
+        Some("kanji") => ("kanji", "kind-kanji"),
+        Some("frequency") => ("freq", "kind-freq"),
+        Some("pitch") => ("pitch", "kind-pitch"),
+        Some("name") => ("name", "kind-name"),
+        Some("grammar") => ("gram", "kind-grammar"),
+        Some("other") => ("other", "kind-other"),
+        Some(_) | None => ("?", "kind-unknown"),
+    };
+    view! {
+        <span class=format!("dict-kind-pill {}", css)>{label}</span>
+    }
+}
+
 #[component]
 fn DictDetailsRow(
     row: Dictionary,
@@ -1786,6 +1810,48 @@ fn DictDetailsRow(
     let (notes, set_notes) = signal::<String>(initial_notes.clone());
     let (saving, set_saving) = signal::<bool>(false);
     let (saved_at, set_saved_at) = signal::<Option<&'static str>>(None);
+
+    // "Use for" dropdown — picks which lookup mode this dict
+    // feeds. Empty string means "Auto / any mode" (kind = NULL),
+    // which is also the fallthrough for pre-migration rows.
+    let initial_kind = row.kind.clone().unwrap_or_default();
+    let (kind, set_kind) = signal::<String>(initial_kind);
+    let (kind_saving, set_kind_saving) = signal::<bool>(false);
+
+    let on_kind_change = move |ev: leptos::ev::Event| {
+        let value = leptos::prelude::event_target_value(&ev);
+        set_kind.set(value.clone());
+        set_kind_saving.set(true);
+        spawn_local(async move {
+            let args = js_sys::Object::new();
+            let _ = js_sys::Reflect::set(
+                &args,
+                &JsValue::from_str("id"),
+                &JsValue::from_f64(id as f64),
+            );
+            if value.is_empty() {
+                let _ = js_sys::Reflect::set(
+                    &args,
+                    &JsValue::from_str("kind"),
+                    &JsValue::NULL,
+                );
+            } else {
+                let _ = js_sys::Reflect::set(
+                    &args,
+                    &JsValue::from_str("kind"),
+                    &JsValue::from_str(&value),
+                );
+            }
+            if let Err(e) = invoke("set_dictionary_kind", args.into()).await {
+                web_sys::console::warn_1(
+                    &format!("set_dictionary_kind: {}", stringify_err(e)).into(),
+                );
+            } else {
+                refresh();
+            }
+            set_kind_saving.set(false);
+        });
+    };
 
     let on_input = move |ev: leptos::ev::Event| {
         set_notes.set(leptos::prelude::event_target_value(&ev));
@@ -1864,6 +1930,30 @@ fn DictDetailsRow(
                         <dt>"Description"</dt>
                         <dd class="dict-details-description">{description}</dd>
                     </dl>
+                    <label class="dict-details-kind-label">
+                        "Use for"
+                        <select
+                            class="dict-details-kind"
+                            prop:value=move || kind.get()
+                            on:change=on_kind_change
+                            prop:disabled=move || kind_saving.get()
+                        >
+                            <option value="">"Auto (any lookup mode)"</option>
+                            <option value="word">"Word lookups"</option>
+                            <option value="kanji">"Kanji lookups"</option>
+                            <option value="frequency">"Frequency annotations"</option>
+                            <option value="pitch">"Pitch annotations"</option>
+                            <option value="name">"Name lookups"</option>
+                            <option value="grammar">"Grammar lookups"</option>
+                            <option value="other">"Other / unsorted"</option>
+                        </select>
+                        {move || if kind_saving.get() {
+                            view! { <span class="muted dict-details-saved">"Saving…"</span> }
+                                .into_any()
+                        } else {
+                            view! { <span></span> }.into_any()
+                        }}
+                    </label>
                     <label class="dict-details-notes-label">
                         "Your notes"
                         <textarea

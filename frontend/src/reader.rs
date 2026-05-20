@@ -773,6 +773,9 @@ pub fn ReaderApp(work_id: u32) -> impl IntoView {
                                             capturing=capturing
                                             set_capturing=set_capturing
                                         />
+
+                                        <hr class="reader-settings-divider" />
+                                        <LookupBindsEditor />
                                     </div>
                                 </div>
                             })}
@@ -1275,28 +1278,61 @@ struct LookupHit {
     entries: Vec<LookupEntry>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+struct KanjiEntry {
+    dict_name: String,
+    character: String,
+    #[serde(default)]
+    onyomi: Option<String>,
+    #[serde(default)]
+    kunyomi: Option<String>,
+    #[serde(default)]
+    meanings: Vec<String>,
+    #[serde(default)]
+    stats_json: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct KanjiHitJs {
+    character: String,
+    entries: Vec<KanjiEntry>,
+}
+
 #[derive(Clone, Debug, Default)]
-struct LookupState {
+struct WordState {
     hits: Vec<LookupHit>,
     text: String,
-    /// Bumped every time the popup-position changes so the Effect
-    /// driving placement re-runs on each cursor move.
-    nonce: u64,
+    /// Set when the most recent fill came from the context
+    /// (sentence-scan) mode rather than plain word mode, so the
+    /// Word tab can render a small "context" badge.
+    is_context: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct KanjiState {
+    hit: Option<KanjiHitJs>,
+    text: String,
+}
+
+/// Which tab the popup is currently showing. Updated on the
+/// arriving lookup's mode + clickable in the popup.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum LookupTab {
+    #[default]
+    Word,
+    Kanji,
 }
 
 #[component]
 fn LookupPopup() -> impl IntoView {
-    let (state, set_state) = signal::<LookupState>(LookupState::default());
+    let (word, set_word) = signal::<WordState>(WordState::default());
+    let (kanji, set_kanji) = signal::<KanjiState>(KanjiState::default());
     let (pos, set_pos) = signal::<(f64, f64)>((0.0, 0.0));
+    let (active_tab, set_active_tab) = signal::<LookupTab>(LookupTab::Word);
     let (visible, set_visible) = signal::<bool>(false);
 
     web_sys::console::log_1(&"[lookup-popup] mounted".into());
 
-    // Poll the globals at ~30Hz. Cheap and avoids needing a custom
-    // pub/sub bridge between JS and wasm — both sides just touch
-    // window globals. We wrap the whole tick in a JsValue-safe
-    // closure so any stray Reflect failure logs instead of crashing
-    // the reader.
     Effect::new(move |_| {
         let cb = Closure::wrap(Box::new(move || {
             let window = match web_sys::window() {
@@ -1329,28 +1365,67 @@ fn LookupPopup() -> impl IntoView {
                 }
                 return;
             }
+            let mode = js_sys::Reflect::get(&res, &JsValue::from_str("mode"))
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_else(|| "word".into());
             let text = js_sys::Reflect::get(&res, &JsValue::from_str("text"))
                 .ok()
                 .and_then(|v| v.as_string())
                 .unwrap_or_default();
-            let last = state.get_untracked();
-            if text == last.text && !last.hits.is_empty() {
-                if !visible.get_untracked() {
-                    set_visible.set(true);
+
+            match mode.as_str() {
+                "kanji" => {
+                    let last_text = kanji.get_untracked().text.clone();
+                    if last_text == text {
+                        // Same kanji — just make sure we're showing
+                        // the kanji tab.
+                        if active_tab.get_untracked() != LookupTab::Kanji {
+                            set_active_tab.set(LookupTab::Kanji);
+                        }
+                        if !visible.get_untracked() {
+                            set_visible.set(true);
+                        }
+                        return;
+                    }
+                    let hit_js = js_sys::Reflect::get(&res, &JsValue::from_str("hit"))
+                        .unwrap_or(JsValue::NULL);
+                    let hit: Option<KanjiHitJs> =
+                        serde_wasm_bindgen::from_value(hit_js).unwrap_or(None);
+                    let has_data = hit.is_some();
+                    set_kanji.set(KanjiState { hit, text });
+                    set_active_tab.set(LookupTab::Kanji);
+                    set_visible.set(
+                        has_data || !word.get_untracked().hits.is_empty(),
+                    );
                 }
-                return;
+                "context" | "word" | _ => {
+                    let last = word.get_untracked();
+                    if last.text == text && !last.hits.is_empty() {
+                        if active_tab.get_untracked() != LookupTab::Word {
+                            set_active_tab.set(LookupTab::Word);
+                        }
+                        if !visible.get_untracked() {
+                            set_visible.set(true);
+                        }
+                        return;
+                    }
+                    let hits_js = js_sys::Reflect::get(&res, &JsValue::from_str("hits"))
+                        .unwrap_or(JsValue::NULL);
+                    let hits: Vec<LookupHit> =
+                        serde_wasm_bindgen::from_value(hits_js).unwrap_or_default();
+                    let has_data = !hits.is_empty();
+                    set_word.set(WordState {
+                        hits,
+                        text,
+                        is_context: mode == "context",
+                    });
+                    set_active_tab.set(LookupTab::Word);
+                    set_visible.set(
+                        has_data || kanji.get_untracked().hit.is_some(),
+                    );
+                }
             }
-            let hits_js = js_sys::Reflect::get(&res, &JsValue::from_str("hits"))
-                .unwrap_or(JsValue::NULL);
-            let hits: Vec<LookupHit> =
-                serde_wasm_bindgen::from_value(hits_js).unwrap_or_default();
-            let next_visible = !hits.is_empty();
-            set_state.set(LookupState {
-                hits,
-                text,
-                nonce: last.nonce.wrapping_add(1),
-            });
-            set_visible.set(next_visible);
         }) as Box<dyn FnMut()>);
         if let Some(win) = web_sys::window() {
             let _ = win.set_interval_with_callback_and_timeout_and_arguments_0(
@@ -1358,7 +1433,6 @@ fn LookupPopup() -> impl IntoView {
                 33,
             );
         }
-        // Leak — the popup lives for the reader window's lifetime.
         cb.forget();
     });
 
@@ -1367,58 +1441,140 @@ fn LookupPopup() -> impl IntoView {
             if !visible.get() {
                 return view! { <span></span> }.into_any();
             }
-            let LookupState { hits, .. } = state.get();
             let (x, y) = pos.get();
-            // Show only the substring the FIRST (longest, highest-
-            // ranked) hit matched — that's the actual "word" the
-            // user is looking at, not our 16-char scan window.
-            let headline = hits
-                .first()
-                .map(|h| h.source.clone())
-                .unwrap_or_default();
             let style = popup_placement_style(x, y);
+            let word_count = word.get().hits.iter().map(|h| h.entries.len()).sum::<usize>();
+            let kanji_count = kanji.get().hit.as_ref().map(|h| h.entries.len()).unwrap_or(0);
+            let tab = active_tab.get();
             view! {
                 <div class="lookup-popup" style=style>
-                    <div class="lookup-popup-source">
-                        <strong>{headline}</strong>
+                    <div class="lookup-tabs">
+                        <button
+                            type="button"
+                            class=move || if active_tab.get() == LookupTab::Word {
+                                "lookup-tab active"
+                            } else if word_count == 0 {
+                                "lookup-tab disabled"
+                            } else {
+                                "lookup-tab"
+                            }
+                            prop:disabled=word_count == 0
+                            on:click=move |_| set_active_tab.set(LookupTab::Word)
+                        >
+                            {format!("Word ({word_count})")}
+                        </button>
+                        <button
+                            type="button"
+                            class=move || if active_tab.get() == LookupTab::Kanji {
+                                "lookup-tab active"
+                            } else if kanji_count == 0 {
+                                "lookup-tab disabled"
+                            } else {
+                                "lookup-tab"
+                            }
+                            prop:disabled=kanji_count == 0
+                            on:click=move |_| set_active_tab.set(LookupTab::Kanji)
+                        >
+                            {format!("Kanji ({kanji_count})")}
+                        </button>
                     </div>
-                    <ul class="lookup-popup-hits">
-                        {hits.into_iter().take(8).map(|h| view! {
-                            <li class="lookup-hit">
-                                <div class="lookup-hit-head">
-                                    <span class="lookup-hit-word">{h.candidate.clone()}</span>
-                                    {(!h.entries.is_empty() && !h.entries[0].reading.is_empty())
-                                        .then(|| view! {
-                                            <span class="lookup-hit-reading muted">
-                                                {h.entries[0].reading.clone()}
-                                            </span>
-                                        })}
-                                    {(!h.inflection_chain.is_empty()).then(|| view! {
-                                        <span class="lookup-hit-chain muted">
-                                            {format!("← {}", h.inflection_chain.join(" ← "))}
-                                        </span>
-                                    })}
-                                </div>
-                                <ul class="lookup-hit-entries">
-                                    {h.entries.into_iter().take(3).map(|e| {
-                                        let gloss = simplify_glossary(&e.glossary_json);
-                                        view! {
-                                            <li class="lookup-entry">
-                                                <span class="lookup-entry-dict muted">
-                                                    {e.dict_name}
-                                                </span>
-                                                <span class="lookup-entry-gloss">{gloss}</span>
-                                            </li>
-                                        }
-                                    }).collect_view()}
-                                </ul>
-                            </li>
+                    {match tab {
+                        LookupTab::Word => render_word_tab(word.get()).into_any(),
+                        LookupTab::Kanji => render_kanji_tab(kanji.get()).into_any(),
+                    }}
+                </div>
+            }.into_any()
+        }}
+    }
+}
+
+fn render_word_tab(state: WordState) -> impl IntoView {
+    let WordState { hits, text, is_context } = state;
+    let headline = hits
+        .first()
+        .map(|h| h.source.clone())
+        .unwrap_or(text.clone());
+    view! {
+        <div class="lookup-popup-source">
+            <strong>{headline}</strong>
+            {is_context.then(|| view! {
+                <span class="lookup-context-badge muted">"context"</span>
+            })}
+        </div>
+        <ul class="lookup-popup-hits">
+            {hits.into_iter().take(8).map(|h| view! {
+                <li class="lookup-hit">
+                    <div class="lookup-hit-head">
+                        <span class="lookup-hit-word">{h.candidate.clone()}</span>
+                        {(!h.entries.is_empty() && !h.entries[0].reading.is_empty())
+                            .then(|| view! {
+                                <span class="lookup-hit-reading muted">
+                                    {h.entries[0].reading.clone()}
+                                </span>
+                            })}
+                        {(!h.inflection_chain.is_empty()).then(|| view! {
+                            <span class="lookup-hit-chain muted">
+                                {format!("← {}", h.inflection_chain.join(" ← "))}
+                            </span>
+                        })}
+                    </div>
+                    <ul class="lookup-hit-entries">
+                        {h.entries.into_iter().take(3).map(|e| {
+                            let gloss = simplify_glossary(&e.glossary_json);
+                            view! {
+                                <li class="lookup-entry">
+                                    <span class="lookup-entry-dict muted">
+                                        {e.dict_name}
+                                    </span>
+                                    <span class="lookup-entry-gloss">{gloss}</span>
+                                </li>
+                            }
                         }).collect_view()}
                     </ul>
-                    <div class="lookup-popup-hint muted">
-                        "Shift + hover to look up. Release to dismiss."
-                    </div>
-                </div>
+                </li>
+            }).collect_view()}
+        </ul>
+    }
+}
+
+fn render_kanji_tab(state: KanjiState) -> impl IntoView {
+    let KanjiState { hit, text } = state;
+    let character = hit.as_ref().map(|h| h.character.clone()).unwrap_or(text);
+    let entries = hit.map(|h| h.entries).unwrap_or_default();
+    view! {
+        <div class="lookup-popup-source">
+            <strong class="lookup-kanji-headline">{character}</strong>
+        </div>
+        {if entries.is_empty() {
+            view! {
+                <p class="muted">"No kanji entries in any enabled dictionary."</p>
+            }.into_any()
+        } else {
+            view! {
+                <ul class="lookup-popup-hits">
+                    {entries.into_iter().take(8).map(|e| view! {
+                        <li class="lookup-hit lookup-kanji-entry">
+                            <div class="lookup-hit-head">
+                                <span class="lookup-entry-dict muted">{e.dict_name}</span>
+                            </div>
+                            {e.onyomi.as_ref().filter(|s| !s.is_empty()).map(|s| view! {
+                                <div class="lookup-kanji-reading">
+                                    <span class="muted">"音: "</span>{s.clone()}
+                                </div>
+                            })}
+                            {e.kunyomi.as_ref().filter(|s| !s.is_empty()).map(|s| view! {
+                                <div class="lookup-kanji-reading">
+                                    <span class="muted">"訓: "</span>{s.clone()}
+                                </div>
+                            })}
+                            {(!e.meanings.is_empty()).then(|| view! {
+                                <div class="lookup-kanji-meanings">
+                                    {e.meanings.join("; ")}
+                                </div>
+                            })}
+                        </li>
+                    }).collect_view()}
+                </ul>
             }.into_any()
         }}
     }
@@ -1521,5 +1677,167 @@ fn leaf_text(v: &serde_json::Value) -> String {
             .collect::<Vec<_>>()
             .join(""),
         _ => String::new(),
+    }
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Phase 5.5 — Lookup keybinding editor (Settings drawer section)
+ *
+ * Stores per-mode modifier combos under jp-reader-lookup-binds:v1
+ * so reader-init.js's `readLookupBinds` can pick them up.
+ * Modifier-only by design — the mode fires when the EXACT
+ * combination of held modifiers matches, so Shift+Alt is its own
+ * binding distinct from Shift or Alt alone.
+ * ────────────────────────────────────────────────────────────────── */
+
+const LOOKUP_BINDS_LS_KEY: &str = "jp-reader-lookup-binds:v1";
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+struct ModifierSet {
+    #[serde(default)]
+    shift: bool,
+    #[serde(default)]
+    alt: bool,
+    #[serde(default)]
+    ctrl: bool,
+    #[serde(default)]
+    meta: bool,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct LookupBinds {
+    word: ModifierSet,
+    kanji: ModifierSet,
+    context: ModifierSet,
+}
+
+impl Default for LookupBinds {
+    fn default() -> Self {
+        Self {
+            word: ModifierSet { shift: true, alt: false, ctrl: false, meta: false },
+            kanji: ModifierSet { shift: false, alt: true, ctrl: false, meta: false },
+            context: ModifierSet { shift: true, alt: true, ctrl: false, meta: false },
+        }
+    }
+}
+
+fn load_lookup_binds() -> LookupBinds {
+    let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else {
+        return LookupBinds::default();
+    };
+    match storage.get_item(LOOKUP_BINDS_LS_KEY).ok().flatten() {
+        Some(json) => serde_json::from_str(&json).unwrap_or_default(),
+        None => LookupBinds::default(),
+    }
+}
+
+fn save_lookup_binds(b: &LookupBinds) {
+    let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else {
+        return;
+    };
+    if let Ok(s) = serde_json::to_string(b) {
+        let _ = storage.set_item(LOOKUP_BINDS_LS_KEY, &s);
+    }
+}
+
+#[component]
+fn LookupBindsEditor() -> impl IntoView {
+    let (binds, set_binds) = signal::<LookupBinds>(load_lookup_binds());
+
+    // Persist on every change.
+    Effect::new(move |_| {
+        let b = binds.get();
+        save_lookup_binds(&b);
+    });
+
+    let on_reset = move |_| set_binds.set(LookupBinds::default());
+
+    view! {
+        <div class="lookup-binds-editor">
+            <h4 style="margin-top: 0">"Lookup keybinds"</h4>
+            <p class="muted" style="font-size: 0.85em">
+                "Hold the chosen modifier(s) while hovering text to trigger lookup. "
+                "Combos like Shift+Alt take priority over single modifiers."
+            </p>
+            <table class="lookup-binds-table">
+                <thead>
+                    <tr>
+                        <th>"Mode"</th>
+                        <th>"Shift"</th>
+                        <th>"Alt"</th>
+                        <th>"Ctrl"</th>
+                        <th>"⌘"</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <ModifierRow
+                        label="Word"
+                        get=move || binds.get().word
+                        set=move |m| set_binds.update(|b| b.word = m)
+                    />
+                    <ModifierRow
+                        label="Kanji"
+                        get=move || binds.get().kanji
+                        set=move |m| set_binds.update(|b| b.kanji = m)
+                    />
+                    <ModifierRow
+                        label="Context"
+                        get=move || binds.get().context
+                        set=move |m| set_binds.update(|b| b.context = m)
+                    />
+                </tbody>
+            </table>
+            <button type="button" class="lookup-binds-reset" on:click=on_reset>
+                "Reset to defaults"
+            </button>
+        </div>
+    }
+}
+
+#[component]
+fn ModifierRow(
+    label: &'static str,
+    get: impl Fn() -> ModifierSet + Copy + 'static + Send + Sync,
+    set: impl Fn(ModifierSet) + Copy + 'static + Send + Sync,
+) -> impl IntoView {
+    let toggle = move |field: &'static str, checked: bool| {
+        let mut m = get();
+        match field {
+            "shift" => m.shift = checked,
+            "alt" => m.alt = checked,
+            "ctrl" => m.ctrl = checked,
+            "meta" => m.meta = checked,
+            _ => {}
+        }
+        set(m);
+    };
+    view! {
+        <tr>
+            <td>{label}</td>
+            <td>
+                <input type="checkbox"
+                    prop:checked=move || get().shift
+                    on:change=move |ev| toggle("shift", leptos::prelude::event_target_checked(&ev))
+                />
+            </td>
+            <td>
+                <input type="checkbox"
+                    prop:checked=move || get().alt
+                    on:change=move |ev| toggle("alt", leptos::prelude::event_target_checked(&ev))
+                />
+            </td>
+            <td>
+                <input type="checkbox"
+                    prop:checked=move || get().ctrl
+                    on:change=move |ev| toggle("ctrl", leptos::prelude::event_target_checked(&ev))
+                />
+            </td>
+            <td>
+                <input type="checkbox"
+                    prop:checked=move || get().meta
+                    on:change=move |ev| toggle("meta", leptos::prelude::event_target_checked(&ev))
+                />
+            </td>
+        </tr>
     }
 }

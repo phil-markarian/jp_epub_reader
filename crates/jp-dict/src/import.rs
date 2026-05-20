@@ -231,6 +231,26 @@ impl Db {
         kanji_files.sort();
         tag_files.sort();
 
+        // Auto-detect the dict's lookup-mode kind based on which
+        // bank file types it ships. The catalog can later override
+        // this via COALESCE — but the heuristic alone covers the
+        // 90% case.
+        let auto_kind: &'static str = if !term_files.is_empty() {
+            // Anything with term banks goes to word lookup, even
+            // hybrids like ハイブリッド新辞林 that also include
+            // kanji entries.
+            "word"
+        } else if !kanji_files.is_empty() {
+            "kanji"
+        } else if !term_meta_files.is_empty() {
+            // No terms, no kanji — only meta. Peek the first file's
+            // first entry to figure out which mode dominates.
+            detect_meta_kind(&mut archive, &term_meta_files[0])
+                .unwrap_or("other")
+        } else {
+            "other"
+        };
+
         // Pre-pass: sum uncompressed bank sizes so the progress
         // callback can report (bytes_done, bytes_total). Opening each
         // entry just to read its central-directory size is cheap.
@@ -269,8 +289,8 @@ impl Db {
             tx.execute(
                 "INSERT INTO dictionary
                     (name, revision, format_version, priority, enabled, imported_at,
-                     description, attribution, url, source_path)
-                 VALUES (?, ?, ?, 0, 1, ?, ?, ?, ?, ?)",
+                     description, attribution, url, source_path, kind)
+                 VALUES (?, ?, ?, 0, 1, ?, ?, ?, ?, ?, ?)",
                 rusqlite::params![
                     index.title,
                     index.revision,
@@ -280,6 +300,7 @@ impl Db {
                     index.attribution,
                     index.url,
                     source_path_str,
+                    auto_kind,
                 ],
             )
             .map_err(|e| Error::Other(format!("insert dictionary: {e}")))?;
@@ -294,12 +315,15 @@ impl Db {
                     "UPDATE dictionary
                         SET description = COALESCE(description, ?),
                             attribution = COALESCE(attribution, ?),
-                            url         = COALESCE(url, ?)
+                            url         = COALESCE(url, ?),
+                            -- catalog kind overrides our heuristic when present
+                            kind        = COALESCE(?, kind)
                       WHERE id = ?",
                     rusqlite::params![
                         entry.description.as_deref(),
                         entry.attribution.as_deref(),
                         entry.url.as_deref(),
+                        entry.kind.as_deref(),
                         dict_id,
                     ],
                 )
@@ -406,6 +430,25 @@ impl Db {
                 .map_err(|e| Error::Other(format!("dictionary_exists: {e}")))?;
             Ok(n > 0)
         })
+    }
+}
+
+/// For a dict that has only term_meta_bank_*.json files (no terms,
+/// no kanji), peek the first entry to classify it as a frequency
+/// or pitch dict. Returns None if the file can't be parsed or
+/// doesn't contain the expected tuple shape.
+fn detect_meta_kind(
+    archive: &mut zip::ZipArchive<std::fs::File>,
+    name: &str,
+) -> Option<&'static str> {
+    let rows = parse_bank(archive, name).ok()?;
+    let first = rows.first()?.as_array()?;
+    let mode = first.get(1)?.as_str()?;
+    match mode {
+        "freq" => Some("frequency"),
+        "pitch" => Some("pitch"),
+        "ipa" => Some("other"),
+        _ => Some("other"),
     }
 }
 
@@ -757,6 +800,63 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn import_detects_word_kind() {
+        // The shared fixture has both term + kanji banks, so kind
+        // = "word" (term presence wins).
+        let tmp = tempfile::tempdir().unwrap();
+        let zip_path = tmp.path().join("test.zip");
+        build_test_zip(&zip_path);
+        let db = Db::open_in_memory().unwrap();
+        db.import_zip(&zip_path).unwrap().expect("imported");
+        let kind: Option<String> = db
+            .with_conn(|c| {
+                c.query_row(
+                    "SELECT kind FROM dictionary WHERE name = 'Test Dict'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| Error::Other(e.to_string()))
+            })
+            .unwrap();
+        assert_eq!(kind.as_deref(), Some("word"));
+    }
+
+    #[test]
+    fn import_detects_kanji_kind() {
+        // Build a kanji-only zip (no term banks).
+        let tmp = tempfile::tempdir().unwrap();
+        let zip_path = tmp.path().join("kanji-only.zip");
+        let file = std::fs::File::create(&zip_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default();
+        zip.start_file("index.json", opts).unwrap();
+        zip.write_all(
+            r#"{"title":"K-only","format":3,"revision":"r1"}"#.as_bytes(),
+        )
+        .unwrap();
+        zip.start_file("kanji_bank_1.json", opts).unwrap();
+        zip.write_all(
+            r#"[["日","ニチ","ひ","jouyou",["sun","day"],{"strokes":"4"}]]"#.as_bytes(),
+        )
+        .unwrap();
+        zip.finish().unwrap();
+
+        let db = Db::open_in_memory().unwrap();
+        db.import_zip(&zip_path).unwrap().expect("imported");
+        let kind: Option<String> = db
+            .with_conn(|c| {
+                c.query_row(
+                    "SELECT kind FROM dictionary WHERE name = 'K-only'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| Error::Other(e.to_string()))
+            })
+            .unwrap();
+        assert_eq!(kind.as_deref(), Some("kanji"));
     }
 
     #[test]

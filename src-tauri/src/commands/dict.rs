@@ -528,6 +528,18 @@ pub fn set_dictionary_notes(
 }
 
 #[tauri::command]
+pub fn set_dictionary_kind(
+    id: i64,
+    kind: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .dict_db
+        .set_dictionary_kind(id, kind.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn set_dictionary_enabled(
     id: i64,
     enabled: bool,

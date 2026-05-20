@@ -59,6 +59,30 @@ pub struct LookupHit {
     pub entries: Vec<DictEntry>,
 }
 
+/// One kanji entry — the kanji-side analogue of `DictEntry`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KanjiEntry {
+    pub dict_id: i64,
+    pub dict_name: String,
+    pub character: String,
+    pub onyomi: Option<String>,
+    pub kunyomi: Option<String>,
+    pub meanings: Vec<String>,
+    /// Free-form stats JSON (grade, strokes, frequency, …).
+    /// Decoded at popup-render time since each dict ships its
+    /// own keys.
+    pub stats_json: Option<String>,
+}
+
+/// All entries we have for a single kanji character. The lookup
+/// returns at most one of these (the character the user hovered);
+/// the popup walks `entries` in dictionary-priority order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KanjiHit {
+    pub character: String,
+    pub entries: Vec<KanjiEntry>,
+}
+
 impl Db {
     /// Lookup at the start of `text`. Caller is responsible for
     /// having sliced the input to start at the cursor position.
@@ -67,7 +91,21 @@ impl Db {
     /// the same).
     pub fn lookup(&self, text: &str, max_scan_len: usize) -> Result<Vec<LookupHit>> {
         let deinflector = Deinflector::new();
-        self.lookup_with(text, max_scan_len, &deinflector)
+        self.lookup_with(text, max_scan_len, &deinflector, None)
+    }
+
+    /// Restricted lookup: only consider dicts whose `kind` is in
+    /// the passed slice (or NULL — pre-migration rows). Used by
+    /// the reader's word + context lookup modes so kanji-only
+    /// dicts don't drown text results.
+    pub fn lookup_kinds(
+        &self,
+        text: &str,
+        max_scan_len: usize,
+        kinds: &[&str],
+    ) -> Result<Vec<LookupHit>> {
+        let deinflector = Deinflector::new();
+        self.lookup_with(text, max_scan_len, &deinflector, Some(kinds))
     }
 
     /// Same as `lookup` but reuses an existing `Deinflector` —
@@ -80,6 +118,7 @@ impl Db {
         text: &str,
         max_scan_len: usize,
         deinflector: &Deinflector,
+        kinds: Option<&[&str]>,
     ) -> Result<Vec<LookupHit>> {
         if text.is_empty() {
             return Ok(Vec::new());
@@ -110,7 +149,7 @@ impl Db {
             let prefix = &text[..end_byte];
 
             let candidates = deinflector.transform(prefix);
-            let mut prefix_hits = self.collect_hits_for_candidates(prefix, &candidates)?;
+            let mut prefix_hits = self.collect_hits_for_candidates(prefix, &candidates, kinds)?;
             if !prefix_hits.is_empty() {
                 // Sort within this prefix length by entry score
                 // descending so the most likely hit is first.
@@ -136,6 +175,7 @@ impl Db {
         &self,
         source: &str,
         candidates: &[TransformedText],
+        kinds: Option<&[&str]>,
     ) -> Result<Vec<LookupHit>> {
         let mut hits: Vec<LookupHit> = Vec::new();
         // De-dup: the deinflector can produce the same candidate
@@ -155,7 +195,7 @@ impl Db {
         }
 
         for (candidate_text, inflection_chain) in seen_candidates {
-            let entries = self.query_term_entries(&candidate_text)?;
+            let entries = self.query_term_entries(&candidate_text, kinds)?;
             if entries.is_empty() {
                 continue;
             }
@@ -169,21 +209,48 @@ impl Db {
         Ok(hits)
     }
 
-    fn query_term_entries(&self, expression: &str) -> Result<Vec<DictEntry>> {
+    fn query_term_entries(
+        &self,
+        expression: &str,
+        kinds: Option<&[&str]>,
+    ) -> Result<Vec<DictEntry>> {
+        // Dynamic-SQL: build a `(d.kind IN (?, ?, …) OR d.kind IS NULL)`
+        // clause matching the kinds vec length so we can use simple
+        // positional bindings instead of taking a dep on a JSON1
+        // sqlite extension. NULL kind = pre-migration row, always
+        // matches so old data still surfaces.
+        let kind_clause = match kinds {
+            Some(ks) if !ks.is_empty() => {
+                let placeholders = std::iter::repeat("?")
+                    .take(ks.len())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(" AND (d.kind IN ({placeholders}) OR d.kind IS NULL)")
+            }
+            _ => String::new(),
+        };
+        let sql = format!(
+            "SELECT t.dict_id, d.name, t.expression, t.reading, t.pos,
+                    t.rules, t.score, t.glossary
+             FROM term t
+             JOIN dictionary d ON d.id = t.dict_id
+             WHERE t.expression = ? AND d.enabled = 1{kind_clause}
+             ORDER BY d.priority DESC, t.score DESC, t.id ASC
+             LIMIT 64",
+        );
         self.with_conn(|c| {
             let mut stmt = c
-                .prepare_cached(
-                    "SELECT t.dict_id, d.name, t.expression, t.reading, t.pos,
-                            t.rules, t.score, t.glossary
-                     FROM term t
-                     JOIN dictionary d ON d.id = t.dict_id
-                     WHERE t.expression = ? AND d.enabled = 1
-                     ORDER BY d.priority DESC, t.score DESC, t.id ASC
-                     LIMIT 64",
-                )
+                .prepare_cached(&sql)
                 .map_err(|e| Error::Other(format!("prepare lookup: {e}")))?;
+            // Bind expression first, then each kind in order.
+            let mut params: Vec<&dyn rusqlite::ToSql> = vec![&expression];
+            if let Some(ks) = kinds {
+                for k in ks {
+                    params.push(k);
+                }
+            }
             let rows = stmt
-                .query_map(rusqlite::params![expression], |r| {
+                .query_map(rusqlite::params_from_iter(params), |r| {
                     Ok(DictEntry {
                         dict_id: r.get(0)?,
                         dict_name: r.get(1)?,
@@ -202,6 +269,57 @@ impl Db {
             }
             Ok(out)
         })
+    }
+
+    /// Lookup the kanji character `ch` across all kanji-tagged
+    /// (or pre-migration NULL) dictionaries. Returns None when
+    /// no dict has the character — caller can show an empty
+    /// kanji tab in that case.
+    pub fn lookup_kanji(&self, ch: char) -> Result<Option<KanjiHit>> {
+        let s = ch.to_string();
+        let entries = self.with_conn(|c| {
+            let mut stmt = c
+                .prepare_cached(
+                    "SELECT k.dict_id, d.name, k.character,
+                            k.onyomi, k.kunyomi, k.meanings, k.stats
+                     FROM kanji k
+                     JOIN dictionary d ON d.id = k.dict_id
+                     WHERE k.character = ? AND d.enabled = 1
+                       AND (d.kind = 'kanji' OR d.kind IS NULL)
+                     ORDER BY d.priority DESC, k.id ASC
+                     LIMIT 32",
+                )
+                .map_err(|e| Error::Other(format!("prepare kanji lookup: {e}")))?;
+            let rows = stmt
+                .query_map(rusqlite::params![&s], |r| {
+                    let meanings_raw: String = r.get(5)?;
+                    let meanings: Vec<String> =
+                        serde_json::from_str(&meanings_raw).unwrap_or_default();
+                    Ok(KanjiEntry {
+                        dict_id: r.get(0)?,
+                        dict_name: r.get(1)?,
+                        character: r.get(2)?,
+                        onyomi: r.get(3)?,
+                        kunyomi: r.get(4)?,
+                        meanings,
+                        stats_json: r.get(6)?,
+                    })
+                })
+                .map_err(|e| Error::Other(format!("kanji lookup query: {e}")))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(|e| Error::Other(e.to_string()))?);
+            }
+            Ok(out)
+        })?;
+        if entries.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(KanjiHit {
+                character: s,
+                entries,
+            }))
+        }
     }
 }
 
@@ -286,5 +404,66 @@ mod tests {
     fn lookup_empty_returns_empty() {
         let db = Db::open_in_memory().unwrap();
         assert!(db.lookup("", 8).unwrap().is_empty());
+    }
+
+    /// Seed two dicts — one word, one kanji-only — then exercise
+    /// the new kind-filtering paths.
+    fn seed_with_kinds(db: &Db) {
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO dictionary (name, format_version, priority, enabled, imported_at, kind)
+                 VALUES ('WordDict', 3, 10, 1, ?, 'word')",
+                rusqlite::params![now()],
+            ).unwrap();
+            let word_id: i64 = c.last_insert_rowid();
+            c.execute(
+                "INSERT INTO term (dict_id, expression, reading, pos, rules, score, sequence, term_tags, glossary)
+                 VALUES (?, '食', 'しょく', NULL, 'n', 50, 1, NULL, '[\"eat\"]')",
+                rusqlite::params![word_id],
+            ).unwrap();
+
+            c.execute(
+                "INSERT INTO dictionary (name, format_version, priority, enabled, imported_at, kind)
+                 VALUES ('KanjiDict', 3, 5, 1, ?, 'kanji')",
+                rusqlite::params![now()],
+            ).unwrap();
+            let kanji_id: i64 = c.last_insert_rowid();
+            c.execute(
+                "INSERT INTO kanji (dict_id, character, onyomi, kunyomi, tags, meanings, stats)
+                 VALUES (?, '食', 'ショク ジキ', 'た', 'jouyou', '[\"food\",\"eat\"]', '{\"strokes\":\"9\"}')",
+                rusqlite::params![kanji_id],
+            ).unwrap();
+            Ok(())
+        }).unwrap();
+    }
+
+    #[test]
+    fn lookup_kanji_returns_entries() {
+        let db = Db::open_in_memory().unwrap();
+        seed_with_kinds(&db);
+        let hit = db.lookup_kanji('食').unwrap().expect("kanji entry");
+        assert_eq!(hit.character, "食");
+        assert_eq!(hit.entries.len(), 1);
+        let e = &hit.entries[0];
+        assert_eq!(e.dict_name, "KanjiDict");
+        assert!(e.meanings.iter().any(|m| m == "eat"));
+        assert_eq!(e.onyomi.as_deref(), Some("ショク ジキ"));
+    }
+
+    #[test]
+    fn lookup_word_kinds_filter_skips_kanji_dicts() {
+        let db = Db::open_in_memory().unwrap();
+        seed_with_kinds(&db);
+        // Without filter — the WordDict's "食" term entry should
+        // surface even though the KanjiDict has nothing in `term`.
+        let hits = db.lookup("食", 4).unwrap();
+        assert!(hits.iter().any(|h| h.candidate == "食"));
+        // With filter — only word-kind dicts should be queried,
+        // which the WordDict satisfies. Kanji-only dicts never
+        // had terms so they wouldn't have shown up anyway, but
+        // the filter shouldn't drop the word entry either.
+        let filtered = db.lookup_kinds("食", 4, &["word"]).unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].entries[0].dict_name, "WordDict");
     }
 }

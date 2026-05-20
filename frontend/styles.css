@@ -412,6 +412,47 @@ details[open] > summary::before { transform: rotate(90deg); }
 }
 .dict-details-saved { font-size: 0.85em; }
 
+.dict-details-kind-label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.dict-details-kind {
+  display: inline-block;
+  margin-left: 8px;
+  margin-right: 8px;
+  font: inherit;
+  padding: 4px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  background: transparent;
+  color: inherit;
+}
+
+/* kind pills shown before each Installed row name */
+.dict-kind-pill {
+  display: inline-block;
+  font-size: 0.7em;
+  font-weight: 600;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 3px;
+  margin-right: 6px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+  background: rgba(127, 127, 127, 0.18);
+  color: inherit;
+}
+.dict-kind-pill.kind-word    { background: rgba(72, 138, 217, 0.22); color: #4d8edc; }
+.dict-kind-pill.kind-kanji   { background: rgba(216, 117, 56, 0.22); color: #d87538; }
+.dict-kind-pill.kind-freq    { background: rgba(106, 175, 95, 0.22); color: #6aaf5f; }
+.dict-kind-pill.kind-pitch   { background: rgba(187, 105, 187, 0.22); color: #bb69bb; }
+.dict-kind-pill.kind-name    { background: rgba(187, 165, 61, 0.22); color: #bba53d; }
+.dict-kind-pill.kind-grammar { background: rgba(95, 175, 175, 0.22); color: #5fafaf; }
+.dict-kind-pill.kind-other   { background: rgba(127, 127, 127, 0.18); opacity: 0.75; }
+.dict-kind-pill.kind-unknown { background: rgba(127, 127, 127, 0.10); opacity: 0.55; }
+
 .dict-installed-table thead th {
   position: sticky;
   top: 0;
@@ -762,6 +803,91 @@ details[open] > summary::before { transform: rotate(90deg); }
   margin-top: 6px;
   font-size: 0.75em;
 }
+
+/* Tab bar at the top of the popup, lets the user flip between
+ * Word + Kanji lookup buckets when both produced hits. */
+.lookup-tabs {
+  display: flex;
+  gap: 4px;
+  margin: -4px -4px 8px -4px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.25);
+}
+.lookup-tab {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-size: 0.85em;
+  font-weight: 500;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-radius: 4px 4px 0 0;
+  border-bottom: 2px solid transparent;
+}
+.lookup-tab:hover:not(:disabled) {
+  background: rgba(127, 127, 127, 0.08);
+}
+.lookup-tab.active {
+  border-bottom-color: rgba(116, 163, 255, 0.9);
+  font-weight: 600;
+}
+.lookup-tab.disabled,
+.lookup-tab:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Inline marker that the current word-tab result came from a
+ * sentence-scan instead of the default 16-char window. */
+.lookup-context-badge {
+  margin-left: 8px;
+  font-size: 0.7em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(116, 163, 255, 0.15);
+  border: 1px solid rgba(116, 163, 255, 0.4);
+}
+
+/* Kanji tab body. The headline is the literal kanji rendered
+ * large so the user immediately sees what they triggered on. */
+.lookup-kanji-headline { font-size: 1.6em; line-height: 1.1; }
+.lookup-kanji-entry { display: block; }
+.lookup-kanji-reading { font-size: 0.95em; margin-top: 2px; }
+.lookup-kanji-meanings {
+  font-size: 0.92em;
+  margin-top: 4px;
+  white-space: normal;
+}
+
+/* Lookup-binds editor inside the Settings drawer. */
+.lookup-binds-editor h4 { font-size: 1em; }
+.lookup-binds-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 6px;
+  font-size: 0.92em;
+}
+.lookup-binds-table th, .lookup-binds-table td {
+  padding: 4px 6px;
+  text-align: center;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.15);
+}
+.lookup-binds-table th:first-child,
+.lookup-binds-table td:first-child {
+  text-align: left;
+  font-weight: 500;
+}
+.lookup-binds-reset {
+  margin-top: 8px;
+  background: transparent;
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  color: inherit;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 0.85em;
+}
+.lookup-binds-reset:hover { background: rgba(127, 127, 127, 0.1); }
 @keyframes queue-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }

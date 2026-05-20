@@ -794,61 +794,98 @@ const attachKeyNav = (target) => {
 };
 
 /* ──────────────────────────────────────────────────────────────────────
- * Shift-hover dictionary lookup
+ * Modifier-keyed dictionary lookup (word / kanji / context)
  *
- * Mirrors Yomitan's scanner pattern: when the user holds Shift and
- * moves the cursor over text inside the foliate iframe, we resolve the
- * text node + offset under the cursor, slice up to LOOKUP_MAX_SCAN_LEN
- * characters of forward text, and ask the backend's dict_lookup
- * command for ranked hits. The result + click position are written to
- * window.__JP_LOOKUP_RESULT, which the Leptos popup component
- * subscribes to via a polling Effect (cheap — same callback pattern as
- * the chapter tracker).
+ * Three modes, each on its own configurable keybinding:
+ *   word    — Shift   (default) → 16-char forward scan, term dicts
+ *   kanji   — Alt     (default) → single CJK char, kanji dicts
+ *   context — Shift+Alt (default) → sentence around cursor, term dicts
  *
- * Throttled to one lookup per 80ms so a sweep across a sentence
- * doesn't fire dozens of IPC roundtrips.
+ * Bindings live in localStorage under `jp-reader-lookup-binds:v1`.
+ * The reader's Settings drawer writes them; we read on every
+ * mousemove (cheap; JSON object lookup).
+ *
+ * Combo bindings beat single-modifier ones so Shift+Alt resolves to
+ * "context", not "word OR kanji". Throttled to one lookup per 80ms
+ * per mode so a sweep across a sentence doesn't fire dozens of IPC
+ * roundtrips.
  * ────────────────────────────────────────────────────────────────── */
 const LOOKUP_MAX_SCAN_LEN = 16;
+const LOOKUP_CONTEXT_MAX = 100;
 const LOOKUP_THROTTLE_MS = 80;
-
-/**
- * Pixel radius around the last Shift+lookup point. While the cursor
- * stays inside this circle, the popup persists — so the user can
- * release Shift and still scroll/read the popup body. Once the
- * cursor moves further away (typically onto a different paragraph
- * or off the text entirely), the popup dismisses.
- * Popup width is 380 + the user usually wants the popup to stay
- * while they read it, so 280 covers the typical word neighborhood
- * without being so tight that small mouse jitter closes it.
- */
+/** Pixel radius the cursor must travel from the trigger before we
+ * auto-dismiss the popup. Generous so jitter / reading the popup
+ * itself doesn't close it. */
 const LOOKUP_DISMISS_RADIUS = 280;
+
+const LOOKUP_BINDS_KEY = "jp-reader-lookup-binds:v1";
+const DEFAULT_LOOKUP_BINDS = {
+    // Each binding: which modifiers MUST be held for the mode to
+    // fire. Other modifiers are ignored unless a higher-priority
+    // binding claims them.
+    word:    { shift: true, alt: false, ctrl: false, meta: false },
+    kanji:   { shift: false, alt: true, ctrl: false, meta: false },
+    context: { shift: true, alt: true, ctrl: false, meta: false },
+};
+
+const readLookupBinds = () => {
+    try {
+        const raw = window.localStorage?.getItem(LOOKUP_BINDS_KEY);
+        if (!raw) return DEFAULT_LOOKUP_BINDS;
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") {
+            return { ...DEFAULT_LOOKUP_BINDS, ...parsed };
+        }
+    } catch {}
+    return DEFAULT_LOOKUP_BINDS;
+};
+
+const modsMatch = (ev, bind) => {
+    return (
+        !!ev.shiftKey === !!bind.shift &&
+        !!ev.altKey === !!bind.alt &&
+        !!ev.ctrlKey === !!bind.ctrl &&
+        !!ev.metaKey === !!bind.meta
+    );
+};
+
+/** Pick the mode whose binding matches the current key state.
+ *  Returns null when no mode matches (no lookup should fire). */
+const pickLookupMode = (ev) => {
+    const binds = readLookupBinds();
+    // Priority: context > kanji > word. A combo binding always
+    // beats a single-modifier binding because its modsMatch is
+    // strictly more constrained, but explicit ordering makes the
+    // intent obvious.
+    if (modsMatch(ev, binds.context)) return "context";
+    if (modsMatch(ev, binds.kanji)) return "kanji";
+    if (modsMatch(ev, binds.word)) return "word";
+    return null;
+};
 
 const attachLookupHover = (doc) => {
     try {
         if (!doc || doc.__jpLookupAttached) return;
         doc.__jpLookupAttached = true;
-        let last = 0;
+        const lastAt = { word: 0, kanji: 0, context: 0 };
         doc.addEventListener("mousemove", (ev) => {
-            if (ev.shiftKey) {
-                // Throttled Shift+hover triggers a fresh lookup —
-                // moving to a new word with Shift held swaps the
-                // popup content.
-                const now = Date.now();
-                if (now - last < LOOKUP_THROTTLE_MS) return;
-                last = now;
-                safeTriggerLookup(doc, ev.clientX, ev.clientY);
-            } else {
-                // Shift not held — check whether the cursor has
-                // strayed outside the radius of the active popup's
-                // trigger point, and dismiss if so. Cursor moving
-                // onto the popup itself doesn't fire this listener
-                // (popup is in the outer document, not the iframe).
+            const mode = pickLookupMode(ev);
+            if (!mode) {
+                // No modifier combo currently matches — let the
+                // existing popup linger until the cursor strays
+                // out of its radius.
                 maybeDismissForDistance(doc, ev.clientX, ev.clientY);
+                return;
             }
+            const now = Date.now();
+            if (now - lastAt[mode] < LOOKUP_THROTTLE_MS) return;
+            lastAt[mode] = now;
+            safeTriggerLookup(mode, doc, ev.clientX, ev.clientY);
         });
         doc.addEventListener("click", (ev) => {
-            if (!ev.shiftKey) return;
-            safeTriggerLookup(doc, ev.clientX, ev.clientY);
+            const mode = pickLookupMode(ev);
+            if (!mode) return;
+            safeTriggerLookup(mode, doc, ev.clientX, ev.clientY);
         });
         console.log("[lookup] hover attached on iframe doc");
     } catch (e) {
@@ -880,40 +917,124 @@ const clearLookup = () => {
     if (window.__JP_LOOKUP_RESULT) {
         window.__JP_LOOKUP_RESULT = null;
     }
-    window.__JP_LOOKUP_LAST_TEXT = null;
+    // Clear per-mode dedup caches so the next trigger always
+    // refires (even if the cursor lands on the same word again).
+    window.__JP_LOOKUP_LAST_WORD = null;
+    window.__JP_LOOKUP_LAST_KANJI = null;
+    window.__JP_LOOKUP_LAST_CONTEXT = null;
     window.__JP_LOOKUP_TRIGGER_OUTER = null;
 };
 
-const safeTriggerLookup = (doc, x, y) => {
+const safeTriggerLookup = (mode, doc, x, y) => {
     try {
-        triggerLookupAt(doc, x, y);
+        triggerLookupAt(mode, doc, x, y);
     } catch (e) {
         console.warn("[lookup] triggerLookupAt threw", e);
     }
 };
 
-const triggerLookupAt = (doc, x, y) => {
+const CJK_RE =
+    /[㐀-䶿一-鿿豈-﫿぀-ゟ゠-ヿ]/;
+
+const triggerLookupAt = (mode, doc, x, y) => {
     const range = caretRangeAt(doc, x, y);
     if (!range) return;
-    const text = extractForwardText(range, LOOKUP_MAX_SCAN_LEN);
-    if (!text) return;
     publishPosition(x, y, doc);
-    if (window.__JP_LOOKUP_LAST_TEXT === text) {
-        return;
-    }
-    window.__JP_LOOKUP_LAST_TEXT = text;
     const invoker =
         window.__TAURI__?.core?.invoke ?? window.__TAURI_INTERNALS__?.invoke;
     if (typeof invoker !== "function") return;
+
+    if (mode === "kanji") {
+        const ch = extractCharAt(range);
+        if (!ch || !CJK_RE.test(ch)) return;
+        if (window.__JP_LOOKUP_LAST_KANJI === ch) return;
+        window.__JP_LOOKUP_LAST_KANJI = ch;
+        invoker("dict_lookup_kanji", { character: ch })
+            .then((hit) => {
+                window.__JP_LOOKUP_RESULT = {
+                    mode: "kanji",
+                    text: ch,
+                    hit: hit ?? null,
+                    at: Date.now(),
+                };
+            })
+            .catch((e) => console.warn("[lookup] dict_lookup_kanji failed", e));
+        return;
+    }
+
+    if (mode === "context") {
+        const text = extractContextText(range, LOOKUP_CONTEXT_MAX);
+        if (!text) return;
+        if (window.__JP_LOOKUP_LAST_CONTEXT === text) return;
+        window.__JP_LOOKUP_LAST_CONTEXT = text;
+        invoker("dict_lookup_context", { text, maxScanLen: LOOKUP_CONTEXT_MAX })
+            .then((hits) => {
+                window.__JP_LOOKUP_RESULT = {
+                    mode: "context",
+                    text,
+                    hits: Array.isArray(hits) ? hits : [],
+                    at: Date.now(),
+                };
+            })
+            .catch((e) => console.warn("[lookup] dict_lookup_context failed", e));
+        return;
+    }
+
+    // word (default)
+    const text = extractForwardText(range, LOOKUP_MAX_SCAN_LEN);
+    if (!text) return;
+    if (window.__JP_LOOKUP_LAST_WORD === text) return;
+    window.__JP_LOOKUP_LAST_WORD = text;
     invoker("dict_lookup", { text, maxScanLen: LOOKUP_MAX_SCAN_LEN })
         .then((hits) => {
             window.__JP_LOOKUP_RESULT = {
+                mode: "word",
                 text,
                 hits: Array.isArray(hits) ? hits : [],
                 at: Date.now(),
             };
         })
         .catch((e) => console.warn("[lookup] dict_lookup failed", e));
+};
+
+/**
+ * Pull the single codepoint at the range's start. If the range
+ * starts at end-of-node, look forward until we find a non-empty
+ * text node and return its first char.
+ */
+const extractCharAt = (range) => {
+    const node = range.startContainer;
+    if (!node) return null;
+    if (node.nodeType === Node.TEXT_NODE) {
+        const tail = node.data.slice(range.startOffset);
+        const ch = Array.from(tail)[0];
+        if (ch && ch.trim()) return ch;
+    }
+    // Walk forward.
+    const text = extractForwardText(range, 4);
+    return Array.from(text)[0] || null;
+};
+
+/**
+ * Sentence-bounded extract for context lookups. Walks forward
+ * from the cursor up to maxChars, stopping at the first sentence
+ * terminator we find AFTER at least a few real characters
+ * (otherwise we'd stop on the period right next to the cursor).
+ */
+const SENTENCE_END = /[。！？!?\n]/;
+const extractContextText = (range, maxChars) => {
+    const raw = extractForwardText(range, maxChars);
+    if (!raw) return "";
+    const chars = Array.from(raw);
+    // Require at least ~3 chars of content before honoring a
+    // terminator so a comma after a single word doesn't truncate.
+    const MIN_CHARS = 3;
+    for (let i = MIN_CHARS; i < chars.length; i++) {
+        if (SENTENCE_END.test(chars[i])) {
+            return chars.slice(0, i + 1).join("");
+        }
+    }
+    return raw;
 };
 
 /**

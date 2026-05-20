@@ -28,6 +28,12 @@ pub struct Dictionary {
     /// find the source without rescanning the user's dict folder.
     /// None for rows imported before migration v3.
     pub source_path: Option<String>,
+    /// Lookup-mode tag set at import time (or manually overridden
+    /// via the details panel). One of: word / kanji / frequency /
+    /// pitch / name / grammar / other. NULL on pre-v4 rows; the
+    /// lookup queries treat NULL as "matches any mode" so old
+    /// dicts still surface.
+    pub kind: Option<String>,
 }
 
 impl Db {
@@ -39,7 +45,7 @@ impl Db {
                             d.priority, d.enabled, d.imported_at,
                             (SELECT COUNT(*) FROM term WHERE dict_id = d.id),
                             d.description, d.attribution, d.url, d.user_notes,
-                            d.source_path
+                            d.source_path, d.kind
                      FROM dictionary d
                      ORDER BY d.priority DESC, d.imported_at ASC",
                 )
@@ -60,6 +66,7 @@ impl Db {
                         url: r.get(10)?,
                         user_notes: r.get(11)?,
                         source_path: r.get(12)?,
+                        kind: r.get(13)?,
                     })
                 })
                 .map_err(|e| Error::Other(e.to_string()))?;
@@ -154,12 +161,14 @@ impl Db {
                         "UPDATE dictionary
                             SET description = COALESCE(description, ?),
                                 attribution = COALESCE(attribution, ?),
-                                url         = COALESCE(url, ?)
+                                url         = COALESCE(url, ?),
+                                kind        = COALESCE(kind, ?)
                           WHERE id = ?",
                         rusqlite::params![
                             entry.description.as_deref(),
                             entry.attribution.as_deref(),
                             entry.url.as_deref(),
+                            entry.kind.as_deref(),
                             id,
                         ],
                     )
@@ -179,6 +188,17 @@ impl Db {
                 rusqlite::params![notes, id],
             )
             .map_err(|e| Error::Other(format!("set notes: {e}")))?;
+            Ok(())
+        })
+    }
+
+    pub fn set_dictionary_kind(&self, id: i64, kind: Option<&str>) -> Result<()> {
+        self.with_conn(|c| {
+            c.execute(
+                "UPDATE dictionary SET kind = ? WHERE id = ?",
+                rusqlite::params![kind, id],
+            )
+            .map_err(|e| Error::Other(format!("set kind: {e}")))?;
             Ok(())
         })
     }

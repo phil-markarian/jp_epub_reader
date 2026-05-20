@@ -24,6 +24,10 @@ pub struct CatalogEntry {
     pub attribution: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
+    /// Pre-known lookup-mode kind. Optional — when present, wins
+    /// over the importer's auto-detect heuristic via COALESCE.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

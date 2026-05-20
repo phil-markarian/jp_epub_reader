@@ -93,6 +93,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/002_dict_metadata.sql"),
     // v3 — Phase 5.5: source_path so Reimport can find the zip
     include_str!("migrations/003_dict_source_path.sql"),
+    // v4 — Phase 5.5: dict kind for lookup-mode routing
+    include_str!("migrations/004_dict_kind.sql"),
 ];
 
 #[cfg(test)]

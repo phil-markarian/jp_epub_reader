@@ -24,6 +24,7 @@
 
 [[entry]]
 name = "大辞林"
+kind = "word"
 description = """A premier Japanese-Japanese 国語辞典 published by Sanseidō.
 Comprehensive headword coverage with carefully written, scholarly definitions.
 Very common pick for serious Japanese learners; pairs well with 大辞泉 for
@@ -33,6 +34,7 @@ attribution = "Sanseidō Publishing"
 
 [[entry]]
 name = "大辞泉"
+kind = "word"
 description = """A major 国語辞典 published by Shogakukan, available digitally as
 デジタル大辞泉 with continual updates for modern usage including loanwords and
 internet vocabulary."""
@@ -41,6 +43,7 @@ attribution = "Shogakukan"
 
 [[entry]]
 name = "新明解国語辞典"
+kind = "word"
 aliases = ["新明解"]
 description = """国語辞典 from Sanseidō with definitions famous for being more
 opinionated and prescriptive than competitors — strong on capturing nuance and
@@ -49,6 +52,7 @@ attribution = "Sanseidō Publishing"
 
 [[entry]]
 name = "明鏡国語辞典"
+kind = "word"
 aliases = ["明鏡"]
 description = """国語辞典 from Taishukan focused on contemporary written Japanese.
 Strong example sentences and clear distinctions between near-synonyms."""
@@ -56,6 +60,7 @@ attribution = "Taishukan"
 
 [[entry]]
 name = "岩波国語辞典"
+kind = "word"
 description = """Conservative 国語辞典 from Iwanami Shoten with a long pedigree.
 Particularly well-regarded for classical and literary vocabulary; some entries
 quote Meiji-era usage."""
@@ -63,6 +68,7 @@ attribution = "Iwanami Shoten"
 
 [[entry]]
 name = "現代国語例解辞典"
+kind = "word"
 description = """Example-sentence-heavy 国語辞典 from Shogakukan. Each entry
 emphasizes how words actually appear in context, with usage notes on
 collocations and register."""
@@ -70,6 +76,7 @@ attribution = "Shogakukan"
 
 [[entry]]
 name = "小学館例解学習国語辞典"
+kind = "word"
 description = """Shogakukan's learner-focused 国語辞典, originally aimed at
 Japanese primary-school students. Definitions are written in plain Japanese,
 which often makes it the most approachable monolingual option for L2 learners."""
@@ -77,33 +84,39 @@ attribution = "Shogakukan"
 
 [[entry]]
 name = "国語辞典オンライン"
+kind = "word"
 description = """Open online 国語辞典. Coverage skews toward modern everyday
 vocabulary; useful as a cross-check when the formal kokugo dicts disagree or
 omit a recent term."""
 
 [[entry]]
 name = "実用日本語表現辞典"
+kind = "word"
 description = """Modern usage dictionary covering colloquial phrases, internet
 slang, and set expressions that the traditional kokugo dicts may not include."""
 
 [[entry]]
 name = "故事ことわざの辞典"
+kind = "word"
 description = """Dictionary of Japanese proverbs (ことわざ) and four-character
 idioms (四字熟語), with origins and usage notes for each entry."""
 
 [[entry]]
 name = "ハイブリッド新辞林"
+kind = "word"
 description = """Combined kokugo + kanji + idiom dictionary from Sanseidō,
 notable for breadth across word types in one lookup."""
 attribution = "Sanseidō Publishing"
 
 [[entry]]
 name = "ことわざ・慣用句の百科事典"
+kind = "word"
 description = """Encyclopedia-style reference for Japanese proverbs and idiomatic
 expressions, with longer explanatory entries than a typical 国語辞典."""
 
 [[entry]]
 name = "使い方の分かる類語例解辞典"
+kind = "word"
 description = """Thesaurus from Shogakukan focused on usage distinctions between
 near-synonyms. Each entry contrasts the listed words with concrete examples."""
 attribution = "Shogakukan"
@@ -114,6 +127,7 @@ attribution = "Shogakukan"
 
 [[entry]]
 name = "JMdict"
+kind = "word"
 description = """The community-built Japanese-English dictionary maintained by
 the Electronic Dictionary Research and Development Group (EDRDG). De-facto
 standard JA→EN lookup; entries include parts of speech, multiple readings, and
@@ -123,6 +137,7 @@ attribution = "EDRDG"
 
 [[entry]]
 name = "JMdict Forms"
+kind = "word"
 description = """Companion bank for JMdict providing alternative kanji surface
 forms (旧字体, hiragana-only forms, etc.) that map to the same headword."""
 url = "https://www.edrdg.org/jmdict/j_jmdict.html"
@@ -130,6 +145,7 @@ attribution = "EDRDG"
 
 [[entry]]
 name = "JMdict (Legacy)"
+kind = "word"
 description = """Older snapshot of JMdict with the simpler structured-content
 format. Useful when newer JMdict entries render poorly in the popup."""
 url = "https://www.edrdg.org/jmdict/j_jmdict.html"
@@ -137,6 +153,7 @@ attribution = "EDRDG"
 
 [[entry]]
 name = "JMnedict"
+kind = "name"
 description = """JMdict's companion proper-noun dictionary: people's names,
 place names, organizations, fictional characters. Indispensable when reading
 fiction that names lots of characters or settings."""
@@ -145,12 +162,14 @@ attribution = "EDRDG"
 
 [[entry]]
 name = "新和英"
+kind = "word"
 description = """Japanese→English dictionary; one of several widely-circulated
 re-packs based on classical translation pairings. Coverage is broader than
 JMdict for literary and formal vocabulary."""
 
 [[entry]]
 name = "NEW斎藤和英大辞典"
+kind = "word"
 aliases = ["斎藤和英"]
 description = """斎藤和英大辞典: classical Japanese-English dictionary by Saitō
 Hidesaburō. Famous for elegant English renderings of formal and literary
@@ -163,6 +182,7 @@ attribution = "Saitō Hidesaburō (public domain)"
 
 [[entry]]
 name = "漢字源"
+kind = "kanji"
 description = """Mainstream kanji dictionary from Gakken with stroke counts,
 radicals, on/kun readings, and compound examples. Heavy on character-formation
 analysis (form / sound / meaning)."""
@@ -170,6 +190,7 @@ attribution = "Gakken"
 
 [[entry]]
 name = "KANJIDIC"
+kind = "kanji"
 description = """The standard machine-readable kanji dictionary maintained by
 EDRDG. Lists every Jōyō and most secondary-use kanji with readings, meanings,
 JLPT level, stroke counts, and radical indices."""
@@ -182,6 +203,7 @@ attribution = "EDRDG"
 
 [[entry]]
 name = "Innocent Ranked"
+kind = "frequency"
 description = """Frequency dictionary derived from a large corpus of Japanese
 fiction. The "ranked" version assigns each word a rank instead of a raw count,
 which lookups can use as a difficulty signal."""
@@ -192,6 +214,7 @@ which lookups can use as a difficulty signal."""
 
 [[entry]]
 name = "NHK日本語発音アクセント新辞典"
+kind = "pitch"
 aliases = ["NHK", "発音アクセント"]
 description = """The authoritative Japanese pitch-accent reference, derived from
 NHK's broadcasting standards. Required reading for anyone serious about

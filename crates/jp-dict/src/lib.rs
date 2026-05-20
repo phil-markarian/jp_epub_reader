@@ -15,4 +15,4 @@ pub use db::Db;
 pub use deinflect::{ConditionFlags, Deinflector, TransformedText};
 pub use dictionary::Dictionary;
 pub use import::{peek_index, ImportSummary, IndexPeek};
-pub use lookup::{DictEntry, LookupHit};
+pub use lookup::{DictEntry, KanjiEntry, KanjiHit, LookupHit};
